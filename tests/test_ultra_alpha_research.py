@@ -17,6 +17,7 @@ from jd_holdings.research.ultra_alpha import (
     stepped_hwm_75_82_budget,
     ultra_alpha_policy,
     v33_leverage_candidates,
+    v33_refinement_candidates,
 )
 
 
@@ -70,3 +71,9 @@ def test_v33_candidate_grid_changes_only_leverage_ladder(config):
         assert policy.rs_sleeve_fraction == baseline.rs_sleeve_fraction == 0.50
         assert policy.hwm_reinvestment_fraction == Decimal("0.75")
         assert policy.jdss_overlay_weight == baseline.jdss_overlay_weight == 0.05
+
+    refinement = v33_refinement_candidates()
+    assert len(refinement) == 10
+    assert all(candidate.volatility_brake == 0.30 for candidate in refinement)
+    assert any(candidate.leverage_strong == 1.50 for candidate in refinement)
+    assert any(candidate.leverage_strong == 1.525 for candidate in refinement)
