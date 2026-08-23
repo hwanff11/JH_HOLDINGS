@@ -16,6 +16,7 @@ from jd_holdings.research.ultra_alpha import (
     rs63_policy,
     stepped_hwm_75_82_budget,
     ultra_alpha_policy,
+    v33_leverage_candidates,
 )
 
 
@@ -56,3 +57,16 @@ def test_rs_comparison_uses_same_63_session_horizon(config):
     expected_qqq = qqq.iloc[-1, 0] / qqq.iloc[-64, 0] - 1
     assert qqq_row["rs_return"] == pytest.approx(expected_qqq)
     assert semiconductor_wins(qqq_row, semi_row)
+
+
+def test_v33_candidate_grid_changes_only_leverage_ladder(config):
+    baseline = V322Policy.from_config(config)
+    candidates = v33_leverage_candidates()
+    assert len(candidates) == 20
+    assert len({candidate.name for candidate in candidates}) == 20
+    for candidate in candidates:
+        policy = candidate.apply(baseline)
+        assert policy.rs_lookback == baseline.rs_lookback == 126
+        assert policy.rs_sleeve_fraction == baseline.rs_sleeve_fraction == 0.50
+        assert policy.hwm_reinvestment_fraction == Decimal("0.75")
+        assert policy.jdss_overlay_weight == baseline.jdss_overlay_weight == 0.05
