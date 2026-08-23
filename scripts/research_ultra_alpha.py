@@ -111,21 +111,25 @@ def main() -> None:
         symbol: data.daily(symbol, warmup_start, args.end)
         for symbol in symbols
     }
-    strategy_engine = StrategyBacktestEngine(config)
     sector_data = {symbol: frames[symbol] for symbol in ("SOXX", "SMH")}
-    boosters = {
-        symbol: strategy_engine.run(
-            symbol,
-            frames[symbol],
-            frames["SPY"],
-            frames["QQQ"],
-            start=strategy_start,
-            end=args.end,
-            slippage=0.001,
-            sector_data=sector_data if symbol == "SOXL" else None,
-        )
-        for symbol in config.enabled_symbols
-    }
+
+    def build_boosters(slippage: float):
+        strategy_engine = StrategyBacktestEngine(config)
+        return {
+            symbol: strategy_engine.run(
+                symbol,
+                frames[symbol],
+                frames["SPY"],
+                frames["QQQ"],
+                start=strategy_start,
+                end=args.end,
+                slippage=slippage,
+                sector_data=sector_data if symbol == "SOXL" else None,
+            )
+            for symbol in config.enabled_symbols
+        }
+
+    boosters = build_boosters(0.001)
     portfolio_frames = {
         symbol: frames[symbol] for symbol in ("QQQ", "TQQQ", "SOXL", "SOXX")
     }
@@ -185,11 +189,12 @@ def main() -> None:
     for slippage in (0.0005, 0.001, 0.002):
         key = f"{slippage:.4f}"
         stress[key] = {}
+        stress_boosters = boosters if slippage == 0.001 else build_boosters(slippage)
         for variant in (variants[0], variants[4]):
             run = run_variant(
                 config,
                 portfolio_frames,
-                boosters,
+                stress_boosters,
                 variant,
                 start=args.start,
                 end=args.end,
