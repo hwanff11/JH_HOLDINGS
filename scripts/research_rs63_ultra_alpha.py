@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+
 import pandas as pd
 
 from jd_holdings.backtest.performance import maximum_underwater_days
@@ -287,7 +288,8 @@ def _markdown(rows, base_slippage: float) -> str:
             "",
             f"## {period}",
             "",
-            "| 시나리오 | Total | CAGR | MDD | Sharpe | Sortino | 최종자산 | 평균노출 | 체결 | 수수료 | 최악구간 |",
+            "| 시나리오 | Total | CAGR | MDD | Sharpe | Sortino | 최종자산 | "
+            "평균노출 | 체결 | 수수료 | 최악구간 |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
         for row in selected:
