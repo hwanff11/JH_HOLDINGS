@@ -40,6 +40,15 @@ def v33_leverage_candidates() -> tuple[V33LeverageCandidate, ...]:
     )
 
 
+def v33_refinement_candidates() -> tuple[V33LeverageCandidate, ...]:
+    """Predeclared local neighborhood around the coarse risk-gated candidate."""
+    return tuple(
+        V33LeverageCandidate(0.30, trend, strong)
+        for trend in (1.275, 1.30)
+        for strong in (1.50, 1.525, 1.55, 1.575, 1.60)
+    )
+
+
 def stepped_hwm_75_82_budget(
     initial_capital: float,
     high_water: float,
