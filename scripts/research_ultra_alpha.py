@@ -25,6 +25,7 @@ from jd_holdings.research.ultra_alpha import (
     stepped_hwm_75_82_budget,
     ultra_alpha_policy,
     v33_leverage_candidates,
+    v33_refinement_candidates,
 )
 
 
@@ -240,6 +241,64 @@ def main() -> None:
         reverse=True,
     )
 
+    refinement_variants = tuple(
+        Variant(
+            "V33_REFINE_"
+            f"VOL{candidate.volatility_brake:.3f}_"
+            f"TREND{candidate.leverage_trend:.3f}_"
+            f"STRONG{candidate.leverage_strong:.3f}",
+            candidate.apply(baseline_policy),
+        )
+        for candidate in v33_refinement_candidates()
+    )
+    refinement_results = {
+        variant.name: run_variant(
+            config,
+            portfolio_frames,
+            boosters,
+            variant,
+            start=args.start,
+            end=args.end,
+            slippage=0.001,
+        )
+        for variant in refinement_variants
+    }
+    refinement_periods = {
+        name: {
+            period: period_metrics(result, period_start, period_end)
+            for period, (period_start, period_end) in periods.items()
+        }
+        for name, result in refinement_results.items()
+    }
+    refinement_eligible = [
+        name
+        for name, candidate_periods in refinement_periods.items()
+        if candidate_periods["train_2011_2018"]["mdd_pct"]
+        >= train_baseline["mdd_pct"] - 1.0
+        and candidate_periods["validation_2019_2022"]["mdd_pct"]
+        >= validation_baseline["mdd_pct"] - 0.5
+        and candidate_periods["validation_2019_2022"]["sharpe"]
+        >= validation_baseline["sharpe"] - 0.05
+        and candidate_periods["validation_2019_2022"]["cagr_pct"]
+        >= validation_baseline["cagr_pct"]
+    ]
+    if not refinement_eligible:
+        raise AssertionError("V3.3 refinement risk gate를 통과한 후보가 없습니다")
+    refined_selected_name = max(
+        refinement_eligible,
+        key=lambda name: refinement_periods[name]["selection_2011_2022"]["cagr_pct"],
+    )
+    selected_variant = next(
+        variant
+        for variant in refinement_variants
+        if variant.name == refined_selected_name
+    )
+    refinement_ranked = sorted(
+        refinement_results,
+        key=lambda name: refinement_periods[name]["selection_2011_2022"]["cagr_pct"],
+        reverse=True,
+    )
+
     stress: dict[str, dict[str, dict]] = {}
     for slippage in (0.0005, 0.001, 0.002):
         key = f"{slippage:.4f}"
@@ -309,6 +368,16 @@ def main() -> None:
             },
             "periods": v33_periods,
             "cost_stress": v33_stress,
+            "refinement": {
+                "eligible": refinement_eligible,
+                "selected": refined_selected_name,
+                "ranked": refinement_ranked,
+                "variants": {
+                    name: result.to_dict(include_equity=False)
+                    for name, result in refinement_results.items()
+                },
+                "periods": refinement_periods,
+            },
         },
     }
     Path(args.output_json).write_text(
@@ -402,13 +471,39 @@ def main() -> None:
         )
     lines += [
         "",
+        "### 경계 미세검증",
+        "",
+        "- Coarse 선정값 1.55x가 탐색 하단이므로 strong 1.50~1.60x와 "
+        "trend 1.275/1.30x를 재검증",
+        f"- 위험 게이트 통과: {len(refinement_eligible)}/10",
+        f"- 최종 연구 후보: **{refined_selected_name}**",
+        "",
+        "| 순위 | 후보 | 2011~2022 CAGR | Validation CAGR | Validation MDD | "
+        "Validation Sharpe | 최근 참고 CAGR | 전체 CAGR | 전체 MDD |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for rank, name in enumerate(refinement_ranked, start=1):
+        candidate_periods = refinement_periods[name]
+        validation = candidate_periods["validation_2019_2022"]
+        selection = candidate_periods["selection_2011_2022"]
+        recent = candidate_periods["observed_recent_2023_latest"]
+        full = refinement_results[name].metrics
+        marker = " ✅" if name == refined_selected_name else ""
+        lines.append(
+            f"| {rank} | {name}{marker} | {selection['cagr_pct']:.2f}% | "
+            f"{validation['cagr_pct']:.2f}% | {validation['mdd_pct']:.2f}% | "
+            f"{validation['sharpe']:.3f} | {recent['cagr_pct']:.2f}% | "
+            f"{full['cagr_pct']:.2f}% | {full['mdd_pct']:.2f}% |"
+        )
+    lines += [
+        "",
         "### 선정 후보 비용 민감도",
         "",
         "| 슬리피지 | 전략 | Total Return | CAGR | MDD | Sharpe |",
         "|---:|---|---:|---:|---:|---:|",
     ]
     for slip, comparison in v33_stress.items():
-        for name in (baseline_name, selected_name):
+        for name in (baseline_name, refined_selected_name):
             metrics = comparison[name]
             lines.append(
                 f"| {float(slip) * 100:.2f}% | {name} | "
