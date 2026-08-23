@@ -24,6 +24,7 @@ from jd_holdings.research.ultra_alpha import (
     rs63_policy,
     stepped_hwm_75_82_budget,
     ultra_alpha_policy,
+    v33_leverage_candidates,
 )
 
 
@@ -174,7 +175,8 @@ def main() -> None:
     periods = {
         "train_2011_2018": ("2011-01-01", "2018-12-31"),
         "validation_2019_2022": ("2019-01-01", "2022-12-31"),
-        "oos_2023_latest": ("2023-01-01", None),
+        "selection_2011_2022": ("2011-01-01", "2022-12-31"),
+        "observed_recent_2023_latest": ("2023-01-01", None),
         "recent_stress_2022_latest": ("2022-01-01", None),
     }
     period_results = {
@@ -184,6 +186,59 @@ def main() -> None:
         }
         for name, result in results.items()
     }
+
+    v33_variants = tuple(
+        Variant(candidate.name, candidate.apply(baseline_policy))
+        for candidate in v33_leverage_candidates()
+    )
+    v33_results = {
+        variant.name: run_variant(
+            config,
+            portfolio_frames,
+            boosters,
+            variant,
+            start=args.start,
+            end=args.end,
+            slippage=0.001,
+        )
+        for variant in v33_variants
+    }
+    v33_periods = {
+        name: {
+            period: period_metrics(result, period_start, period_end)
+            for period, (period_start, period_end) in periods.items()
+        }
+        for name, result in v33_results.items()
+    }
+    baseline_periods = period_results[config.version]
+    train_baseline = baseline_periods["train_2011_2018"]
+    validation_baseline = baseline_periods["validation_2019_2022"]
+    eligible_names = [
+        name
+        for name, candidate_periods in v33_periods.items()
+        if candidate_periods["train_2011_2018"]["mdd_pct"]
+        >= train_baseline["mdd_pct"] - 1.0
+        and candidate_periods["validation_2019_2022"]["mdd_pct"]
+        >= validation_baseline["mdd_pct"] - 0.5
+        and candidate_periods["validation_2019_2022"]["sharpe"]
+        >= validation_baseline["sharpe"] - 0.05
+        and candidate_periods["validation_2019_2022"]["cagr_pct"]
+        >= validation_baseline["cagr_pct"]
+    ]
+    if not eligible_names:
+        raise AssertionError("V3.3 risk gate를 통과한 레버리지 후보가 없습니다")
+    selected_name = max(
+        eligible_names,
+        key=lambda name: v33_periods[name]["selection_2011_2022"]["cagr_pct"],
+    )
+    selected_variant = next(
+        variant for variant in v33_variants if variant.name == selected_name
+    )
+    ranked_names = sorted(
+        v33_results,
+        key=lambda name: v33_periods[name]["selection_2011_2022"]["cagr_pct"],
+        reverse=True,
+    )
 
     stress: dict[str, dict[str, dict]] = {}
     for slippage in (0.0005, 0.001, 0.002):
@@ -202,6 +257,23 @@ def main() -> None:
             )
             stress[key][variant.name] = run.metrics
 
+    v33_stress: dict[str, dict[str, dict]] = {}
+    for slippage in (0.0005, 0.001, 0.002):
+        key = f"{slippage:.4f}"
+        stress_boosters = boosters if slippage == 0.001 else build_boosters(slippage)
+        v33_stress[key] = {}
+        for variant in (variants[0], selected_variant):
+            run = run_variant(
+                config,
+                portfolio_frames,
+                stress_boosters,
+                variant,
+                start=args.start,
+                end=args.end,
+                slippage=slippage,
+            )
+            v33_stress[key][variant.name] = run.metrics
+
     payload = {
         "data_end": results[config.version].end_date.isoformat(),
         "assumptions": {
@@ -219,6 +291,25 @@ def main() -> None:
         },
         "periods": period_results,
         "cost_stress": stress,
+        "v33_candidate_research": {
+            "selection_data": "2011-2022 only",
+            "recent_data_policy": "2023-latest observed after selection; not independent OOS",
+            "risk_gate": {
+                "train_mdd_max_degradation_pct_point": 1.0,
+                "validation_mdd_max_degradation_pct_point": 0.5,
+                "validation_sharpe_max_degradation": 0.05,
+                "validation_cagr_must_not_underperform": True,
+            },
+            "eligible": eligible_names,
+            "selected": selected_name,
+            "ranked": ranked_names,
+            "variants": {
+                name: result.to_dict(include_equity=False)
+                for name, result in v33_results.items()
+            },
+            "periods": v33_periods,
+            "cost_stress": v33_stress,
+        },
     }
     Path(args.output_json).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -281,6 +372,50 @@ def main() -> None:
         "결과와 직접 대조한다. 차이가 나면 기존 주장값을 재현 성공으로 보지 않는다.",
         "",
     ]
+    lines += [
+        "## V3.3 레버리지 후보 선별",
+        "",
+        "- RS126·SOXL50·HWM75·H40-S3 고정",
+        "- 선별 데이터: 2011~2022만 사용",
+        "- 2023~최신: 이미 관찰된 참고 구간이며 독립 OOS로 사용하지 않음",
+        f"- 위험 게이트 통과: {len(eligible_names)}/20",
+        f"- 선정 후보: **{selected_name}**",
+        "",
+        "| 순위 | 후보 | 2011~2022 CAGR | Train MDD | Validation CAGR | "
+        "Validation MDD | Validation Sharpe | 최근 참고 CAGR | 전체 CAGR | 전체 MDD |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for rank, name in enumerate(ranked_names, start=1):
+        candidate_periods = v33_periods[name]
+        train = candidate_periods["train_2011_2018"]
+        validation = candidate_periods["validation_2019_2022"]
+        selection = candidate_periods["selection_2011_2022"]
+        recent = candidate_periods["observed_recent_2023_latest"]
+        full = v33_results[name].metrics
+        marker = " ✅" if name == selected_name else ""
+        lines.append(
+            f"| {rank} | {name}{marker} | {selection['cagr_pct']:.2f}% | "
+            f"{train['mdd_pct']:.2f}% | {validation['cagr_pct']:.2f}% | "
+            f"{validation['mdd_pct']:.2f}% | {validation['sharpe']:.3f} | "
+            f"{recent['cagr_pct']:.2f}% | {full['cagr_pct']:.2f}% | "
+            f"{full['mdd_pct']:.2f}% |"
+        )
+    lines += [
+        "",
+        "### 선정 후보 비용 민감도",
+        "",
+        "| 슬리피지 | 전략 | Total Return | CAGR | MDD | Sharpe |",
+        "|---:|---|---:|---:|---:|---:|",
+    ]
+    for slip, comparison in v33_stress.items():
+        for name in (baseline_name, selected_name):
+            metrics = comparison[name]
+            lines.append(
+                f"| {float(slip) * 100:.2f}% | {name} | "
+                f"{metrics['total_return_pct']:+.2f}% | {metrics['cagr_pct']:.2f}% | "
+                f"{metrics['mdd_pct']:.2f}% | {metrics['sharpe']:.3f} |"
+            )
+    lines.append("")
     Path(args.output_md).write_text("\n".join(lines), encoding="utf-8")
 
 
