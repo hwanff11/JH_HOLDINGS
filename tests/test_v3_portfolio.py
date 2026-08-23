@@ -305,3 +305,17 @@ def test_portfolio_backtest_stages_initial_entry_by_requested_session(config):
         assert staged == pytest.approx(
             {symbol: weight * fraction for symbol, weight in full_target.items()}
         )
+
+
+def test_default_sizing_hook_preserves_hwm75_contract(config):
+    engine = PortfolioBacktestEngine(config)
+    assert engine._sizing_equity(
+        initial_capital=50_000.0,
+        high_water=60_000.0,
+        open_equity=80_000.0,
+    ) == pytest.approx(57_500.0)
+    assert engine._sizing_equity(
+        initial_capital=50_000.0,
+        high_water=100_000.0,
+        open_equity=70_000.0,
+    ) == pytest.approx(70_000.0)

@@ -59,6 +59,23 @@ class PortfolioBacktestEngine:
         self.policy = V322Policy.from_config(config)
         self.onboarding_policy = InitialOnboardingPolicy.from_config(config)
 
+    def _sizing_equity(
+        self,
+        *,
+        initial_capital: float,
+        high_water: float,
+        open_equity: float,
+    ) -> float:
+        """Return the deployable sizing base.
+
+        Research-only subclasses may override this hook to test alternative
+        profit-reinvestment schedules.  Production behavior remains HWM75.
+        """
+        sizing_equity = initial_capital + float(
+            self.policy.hwm_reinvestment_fraction
+        ) * max(0.0, high_water - initial_capital)
+        return max(0.0, min(sizing_equity, open_equity))
+
     def run(
         self,
         frames: dict[str, pd.DataFrame],
@@ -143,10 +160,11 @@ class PortfolioBacktestEngine:
                 quantities[symbol] * opens[symbol] * (1 - sell_fee)
                 for symbol in ALLOCATION_SYMBOLS
             )
-            sizing_equity = initial_capital + float(
-                self.policy.hwm_reinvestment_fraction
-            ) * max(0.0, high_water - initial_capital)
-            sizing_equity = max(0.0, min(sizing_equity, open_equity))
+            sizing_equity = self._sizing_equity(
+                initial_capital=initial_capital,
+                high_water=high_water,
+                open_equity=open_equity,
+            )
 
             if pending != current:
                 onboarding_stage = None
