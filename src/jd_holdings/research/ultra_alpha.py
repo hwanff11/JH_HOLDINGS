@@ -1,10 +1,43 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from jd_holdings.core.v322_allocation import V322Policy
 
 ULTRA_ALPHA_ID = "JDSS-3.3.0-ULTRA-ALPHA"
+
+
+@dataclass(frozen=True)
+class V33LeverageCandidate:
+    volatility_brake: float
+    leverage_trend: float
+    leverage_strong: float
+
+    @property
+    def name(self) -> str:
+        return (
+            "V33_LEVERAGE_"
+            f"VOL{int(self.volatility_brake * 100):02d}_"
+            f"TREND{int(self.leverage_trend * 100):03d}_"
+            f"STRONG{int(self.leverage_strong * 100):03d}"
+        )
+
+    def apply(self, baseline: V322Policy) -> V322Policy:
+        return replace(
+            baseline,
+            volatility_brake=self.volatility_brake,
+            leverage_trend=self.leverage_trend,
+            leverage_strong=self.leverage_strong,
+        )
+
+
+def v33_leverage_candidates() -> tuple[V33LeverageCandidate, ...]:
+    return tuple(
+        V33LeverageCandidate(volatility, trend, strong)
+        for volatility in (0.28, 0.30)
+        for trend in (1.25, 1.30)
+        for strong in (1.55, 1.60, 1.65, 1.70, 1.75)
+    )
 
 
 def stepped_hwm_75_82_budget(
