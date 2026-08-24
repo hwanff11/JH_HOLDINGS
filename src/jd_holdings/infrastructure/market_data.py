@@ -88,17 +88,31 @@ class YFinanceDataSource:
                 time.sleep(YFINANCE_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
 
         if frame is None or frame.empty:
-            # Refresh failure may use cache only when it already covers the exact
-            # requested completed session. Stale cache must never drive trading.
-            fallback = self._best_cache(symbol, start, end, require_full_range=True)
+            # Trading refresh must never fall back to stale data. Non-refresh
+            # callers preserve the historical cache behavior used by research.
+            fallback = self._best_cache(
+                symbol,
+                start,
+                end,
+                require_full_range=refresh,
+            )
             if fallback is not None:
-                LOGGER.warning(
-                    "%s yfinance 조회가 %d회 실패하여 검증된 캐시(최신일 %s)를 사용합니다: %s",
-                    symbol,
-                    YFINANCE_DOWNLOAD_ATTEMPTS,
-                    fallback.index[-1].date(),
-                    last_error,
-                )
+                if refresh:
+                    LOGGER.warning(
+                        "%s yfinance 조회가 %d회 실패하여 검증된 캐시(최신일 %s)를 사용합니다: %s",
+                        symbol,
+                        YFINANCE_DOWNLOAD_ATTEMPTS,
+                        fallback.index[-1].date(),
+                        last_error,
+                    )
+                else:
+                    LOGGER.warning(
+                        "%s yfinance 조회가 %d회 실패하여 기존 캐시(최신일 %s)를 사용합니다: %s",
+                        symbol,
+                        YFINANCE_DOWNLOAD_ATTEMPTS,
+                        fallback.index[-1].date(),
+                        last_error,
+                    )
                 return fallback
             raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}") from last_error
 
