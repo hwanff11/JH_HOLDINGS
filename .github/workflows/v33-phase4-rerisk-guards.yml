@@ -5,7 +5,9 @@ on:
     paths:
       - "scripts/research_v33_phase4_rerisk_guards.py"
       - "scripts/research_v33_phase4_runner.py"
+      - "scripts/research_v33_phase4_robustness.py"
       - "scripts/research_v33_phase3_rerisk.py"
+      - "scripts/research_v33_phase3_robustness.py"
       - ".github/workflows/v33-phase4-rerisk-guards.yml"
       - "src/**"
       - "configs/**"
@@ -24,12 +26,18 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
       - name: Ruff
-        run: ruff check scripts/research_v33_phase4_rerisk_guards.py scripts/research_v33_phase4_runner.py
+        run: >-
+          ruff check
+          scripts/research_v33_phase4_rerisk_guards.py
+          scripts/research_v33_phase4_runner.py
+          scripts/research_v33_phase4_robustness.py
       - name: Run Phase4 sweep
         run: |
           python scripts/research_v33_phase4_runner.py \
             --output-json reports/v33-phase4-rerisk-guards.json \
             --output-md reports/v33-phase4-rerisk-guards.md
+      - name: Run Phase4 robustness
+        run: python scripts/research_v33_phase4_robustness.py
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -37,3 +45,5 @@ jobs:
           path: |
             reports/v33-phase4-rerisk-guards.json
             reports/v33-phase4-rerisk-guards.md
+            reports/v33-phase4-robustness.json
+            reports/v33-phase4-robustness.md
