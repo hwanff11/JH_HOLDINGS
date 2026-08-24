@@ -7,6 +7,13 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+from research_v33_phase3_rerisk import (
+    load_history,
+    next_step,
+    result_row,
+    run_with_targets,
+    selection_score,
+)
 
 from jd_holdings.core.v322_allocation import (
     ALLOCATION_SYMBOLS,
@@ -19,13 +26,6 @@ from jd_holdings.core.v322_allocation import (
     replay_targets,
     semiconductor_wins,
     trend_vote,
-)
-from research_v33_phase3_rerisk import (
-    load_history,
-    next_step,
-    result_row,
-    run_with_targets,
-    selection_score,
 )
 
 
