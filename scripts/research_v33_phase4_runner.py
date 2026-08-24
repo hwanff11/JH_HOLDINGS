@@ -6,10 +6,18 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-
-from research_v33_phase3_rerisk import replay_targets, result_row, run_with_targets, selection_score
-from research_v33_phase4_rerisk_guards import SCENARIOS, build_guard_targets, render_markdown
-from research_v33_phase3_rerisk import load_history
+from research_v33_phase3_rerisk import (
+    load_history,
+    replay_targets,
+    result_row,
+    run_with_targets,
+    selection_score,
+)
+from research_v33_phase4_rerisk_guards import (
+    SCENARIOS,
+    build_guard_targets,
+    render_markdown,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,7 +52,10 @@ def main() -> None:
         active["SOXL"],
         policy,
     )
-    pd.testing.assert_frame_equal(targets["MONTHLY_CONTROL"][production.columns], production)
+    pd.testing.assert_frame_equal(
+        targets["MONTHLY_CONTROL"][production.columns],
+        production,
+    )
 
     results_by_cost: dict[str, list[dict]] = {}
     for slip in (0.0005, base_slip, 0.002):
@@ -67,7 +78,11 @@ def main() -> None:
     ranked = []
     for row in base_rows:
         copy = json.loads(json.dumps(row))
-        copy["selection_score"] = 0.0 if row["scenario"] == "MONTHLY_CONTROL" else selection_score(row, control)
+        copy["selection_score"] = (
+            0.0
+            if row["scenario"] == "MONTHLY_CONTROL"
+            else selection_score(row, control)
+        )
         ranked.append(copy)
     ranked.sort(key=lambda row: row["selection_score"], reverse=True)
 
@@ -93,7 +108,10 @@ def main() -> None:
     output_md = Path(args.output_md)
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_json.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     output_md.write_text(render_markdown(payload), encoding="utf-8")
     print(output_md.read_text(encoding="utf-8"))
 
