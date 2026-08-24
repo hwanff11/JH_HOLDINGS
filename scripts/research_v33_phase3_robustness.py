@@ -5,7 +5,6 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-
 import research_v33_phase3_rerisk as p3
 
 CANDIDATES = (
@@ -50,12 +49,21 @@ def summarize_rolling(candidate: list[dict], control: list[dict]) -> dict:
             continue
         deltas.append(row["cagr_pct"] - base["cagr_pct"])
         mdd_deltas.append(abs(row["mdd_pct"]) - abs(base["mdd_pct"]))
+    mdd_not_worse = (
+        round(sum(x <= 0 for x in mdd_deltas) / len(mdd_deltas) * 100, 2)
+        if mdd_deltas
+        else 0.0
+    )
     return {
         "windows": len(deltas),
-        "cagr_beat_rate_pct": round(sum(x > 0 for x in deltas) / len(deltas) * 100, 2) if deltas else 0.0,
-        "median_cagr_delta_pctpt": round(float(pd.Series(deltas).median()), 2) if deltas else 0.0,
+        "cagr_beat_rate_pct": round(sum(x > 0 for x in deltas) / len(deltas) * 100, 2)
+        if deltas
+        else 0.0,
+        "median_cagr_delta_pctpt": round(float(pd.Series(deltas).median()), 2)
+        if deltas
+        else 0.0,
         "worst_cagr_delta_pctpt": round(min(deltas), 2) if deltas else 0.0,
-        "mdd_not_worse_rate_pct": round(sum(x <= 0 for x in mdd_deltas) / len(mdd_deltas) * 100, 2) if mdd_deltas else 0.0,
+        "mdd_not_worse_rate_pct": mdd_not_worse,
     }
 
 
@@ -148,7 +156,9 @@ def main() -> None:
     Path("reports/v33-phase3-robustness.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    Path("reports/v33-phase3-robustness.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path("reports/v33-phase3-robustness.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
     print("\n".join(lines))
 
 
