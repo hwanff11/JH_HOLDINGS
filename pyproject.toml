@@ -13,10 +13,10 @@ dependencies = [
   "numpy==2.5.1",
   "pandas==3.0.5",
   "pyTelegramBotAPI==4.36.1",
-  "python-dotenv==1.2.2",
+  "python-dotenv==1.2.3",
   "PyYAML==6.0.3",
   "requests==2.34.2",
-  "scikit-learn==1.8.0",
+  "scikit-learn==1.9.0",
   "scipy==1.18.0",
   "yfinance==1.6.0",
 ]
@@ -25,7 +25,7 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.16.3",
+  "ruff==0.16.4",
 ]
 
 [project.scripts]
