@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from threading import Lock
@@ -11,10 +12,9 @@ import yfinance as yf
 from jd_holdings.core.indicators import MarketDataError, normalize_ohlcv
 
 LOGGER = logging.getLogger(__name__)
-# The canonical runner asks for 420 calendar days of extra warmup. Leveraged
-# ETFs began a few months after that warmup start, so allow their real inception
-# gap while still rejecting a cache that starts years into the requested history.
 CACHE_START_GRACE_DAYS = 180
+YFINANCE_DOWNLOAD_ATTEMPTS = 3
+YFINANCE_RETRY_BASE_SECONDS = 1.0
 
 
 class YFinanceDataSource:
@@ -25,10 +25,6 @@ class YFinanceDataSource:
         self._lock = Lock()
         if self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            # The hardened systemd unit makes the user's home read-only. yfinance
-            # otherwise tries ~/.cache/py-yfinance for timezone/cookie/ISIN caches
-            # and logs cache failures on every fresh process. Keep all yfinance
-            # internal caches under JDSS_CACHE_PATH, which systemd explicitly allows.
             yfinance_cache = self.cache_dir / "yfinance"
             yfinance_cache.mkdir(parents=True, exist_ok=True)
             yf.set_tz_cache_location(str(yfinance_cache))
@@ -57,47 +53,69 @@ class YFinanceDataSource:
         if end:
             end_date = pd.Timestamp(end).date() + timedelta(days=1)
             end_exclusive = end_date.isoformat()
-        try:
-            with self._lock:
-                frame = yf.download(
+
+        last_error: Exception | None = None
+        frame: pd.DataFrame | None = None
+        for attempt in range(1, YFINANCE_DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with self._lock:
+                    frame = yf.download(
+                        symbol,
+                        start=str(start),
+                        end=end_exclusive,
+                        interval="1d",
+                        auto_adjust=True,
+                        actions=False,
+                        progress=False,
+                        threads=False,
+                        repair=True,
+                        multi_level_index=False,
+                    )
+                if frame is not None and not frame.empty:
+                    break
+                last_error = MarketDataError(f"yfinance 빈 응답: {symbol}")
+            except Exception as exc:  # pragma: no cover - provider/network failure
+                last_error = exc
+
+            if attempt < YFINANCE_DOWNLOAD_ATTEMPTS:
+                LOGGER.warning(
+                    "%s yfinance 일봉 조회 실패 (%d/%d), 재시도합니다: %s",
                     symbol,
-                    start=str(start),
-                    end=end_exclusive,
-                    interval="1d",
-                    auto_adjust=True,
-                    actions=False,
-                    progress=False,
-                    threads=False,
-                    repair=True,
-                    multi_level_index=False,
+                    attempt,
+                    YFINANCE_DOWNLOAD_ATTEMPTS,
+                    last_error,
                 )
-        except Exception as exc:
-            if not refresh:
-                fallback = self._best_cache(
-                    symbol, start, end, require_full_range=False
-                )
-                if fallback is not None:
-                    LOGGER.warning(
-                        "%s yfinance 조회 실패로 캐시 최신일 %s까지 사용합니다: %s",
-                        symbol,
-                        fallback.index[-1].date(),
-                        exc,
-                    )
-                    return fallback
-            raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}") from exc
+                time.sleep(YFINANCE_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+
         if frame is None or frame.empty:
-            if not refresh:
-                fallback = self._best_cache(
-                    symbol, start, end, require_full_range=False
-                )
-                if fallback is not None:
+            # Trading refresh must never fall back to stale data. Non-refresh
+            # callers preserve the historical cache behavior used by research.
+            fallback = self._best_cache(
+                symbol,
+                start,
+                end,
+                require_full_range=refresh,
+            )
+            if fallback is not None:
+                if refresh:
                     LOGGER.warning(
-                        "%s yfinance 응답이 비어 캐시 최신일 %s까지 사용합니다",
+                        "%s yfinance 조회가 %d회 실패하여 검증된 캐시(최신일 %s)를 사용합니다: %s",
                         symbol,
+                        YFINANCE_DOWNLOAD_ATTEMPTS,
                         fallback.index[-1].date(),
+                        last_error,
                     )
-                    return fallback
-            raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}")
+                else:
+                    LOGGER.warning(
+                        "%s yfinance 조회가 %d회 실패하여 기존 캐시(최신일 %s)를 사용합니다: %s",
+                        symbol,
+                        YFINANCE_DOWNLOAD_ATTEMPTS,
+                        fallback.index[-1].date(),
+                        last_error,
+                    )
+                return fallback
+            raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}") from last_error
+
         normalized = normalize_ohlcv(frame)
         if cache_path:
             normalized.to_csv(cache_path)
@@ -167,10 +185,6 @@ class YFinanceDataSource:
                 continue
             if full_frame.empty:
                 continue
-            # An offline fallback may end before the request. A small start gap
-            # is allowed because the runner deliberately requests extra calendar
-            # warmup before the oldest cached market session, but a recent-only
-            # cache must never impersonate a full-history data set.
             if full_frame.index[0] > requested_start + pd.Timedelta(
                 days=CACHE_START_GRACE_DAYS
             ):
