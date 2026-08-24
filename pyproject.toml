@@ -16,6 +16,7 @@ dependencies = [
   "python-dotenv==1.2.2",
   "PyYAML==6.0.3",
   "requests==2.34.2",
+  "scikit-learn==1.8.0",
   "scipy==1.18.0",
   "yfinance==1.6.0",
 ]
