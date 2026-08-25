@@ -3,8 +3,9 @@ from __future__ import annotations
 import html
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
+from .market_clock import session_is_allowed
 from .telegram_bot import (
     SEOUL_TZ,
     _daily_analysis_is_due,
@@ -86,6 +87,26 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
 
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
         super()._send(_operator_text(text), markup=markup, chat_id=chat_id)
+
+    def _prepare_today_buy_batch(self):
+        """Fail closed with a readable state before creating any approvals."""
+        now_kst = datetime.now(SEOUL_TZ)
+        if _is_toss_order_maintenance_window(now_kst):
+            return (
+                "🛠️ <b>[오늘 주문 · 토스 주문 점검시간]</b>\n\n"
+                "한국시간 08:50~08:59에는 미국주식 주문 취소·리셋 구간이므로 "
+                "새 매수 검토를 만들지 않습니다. 09:00 이후 다시 확인해 주세요.",
+                None,
+            )
+        session = self.market_clock.classify_session(datetime.now(UTC))
+        if not session_is_allowed(session, self.config):
+            return (
+                "🕒 <b>[오늘 주문 · 주문 가능시간 대기]</b>\n\n"
+                f"현재 세션 <code>{html.escape(session)}</code>은 V3.2.2 주문 허용시간이 아닙니다.\n"
+                "전략 목표는 유지되며 주문 가능한 세션에서 다시 검토해 주세요.",
+                None,
+            )
+        return super()._prepare_today_buy_batch()
 
     def notify_startup_reconciliation(self, mismatches: dict[str, list[str]]) -> None:
         if not mismatches:
