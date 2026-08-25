@@ -5,6 +5,7 @@ on:
     paths:
       - "scripts/research_qld_only_simple_phase10.py"
       - "scripts/research_qld_only_vol_phase11.py"
+      - "scripts/research_qld_only_vol_phase12_neighborhood.py"
       - ".github/workflows/qld-only-simple-research.yml"
       - "scripts/research_qld_sso_alpha.py"
       - "scripts/research_qld_sso_vs_v322.py"
@@ -28,6 +29,7 @@ jobs:
         run: |
           ruff check scripts/research_qld_only_simple_phase10.py \
             scripts/research_qld_only_vol_phase11.py \
+            scripts/research_qld_only_vol_phase12_neighborhood.py \
             scripts/research_qld_sso_alpha.py \
             scripts/research_qld_sso_vs_v322.py
       - name: Run Phase 10 simple QLD sweep
@@ -40,6 +42,11 @@ jobs:
           python scripts/research_qld_only_vol_phase11.py \
             --output-json reports/qld-only-vol-phase11.json \
             --output-md reports/qld-only-vol-phase11.md
+      - name: Run Phase 12 local neighborhood
+        run: |
+          python scripts/research_qld_only_vol_phase12_neighborhood.py \
+            --output-json reports/qld-only-vol-phase12.json \
+            --output-md reports/qld-only-vol-phase12.md
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -49,3 +56,5 @@ jobs:
             reports/qld-only-simple-phase10.md
             reports/qld-only-vol-phase11.json
             reports/qld-only-vol-phase11.md
+            reports/qld-only-vol-phase12.json
+            reports/qld-only-vol-phase12.md
