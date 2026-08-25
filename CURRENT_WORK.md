@@ -8,19 +8,22 @@
 - 공식 릴리즈: **`v3.2.2`**
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
-- Oracle runtime: **최신 main 배포 완료 / 서비스 active**
-- 기능 source/runtime revision: **일치 확인 완료** (문서-only revision 제외)
+- Oracle runtime: **최신 기능 main 배포 완료 / 서비스 active**
+- 기능 source/runtime revision: **`14b0ddd4022b12184fff96d39af1e447043b75de` 일치 확인 완료**
 - 최근 forced dry-run 배포: **성공 / smoke test 성공**
 - live: **LOCKED OFF**
 - Oracle 환경: **`JDSS_TRADING_MODE=dry_run` / `JDSS_LIVE_CONFIRMATION` empty**
 - 설정 잠금: **`portfolio.live_enabled=false`**
 
-## 최근 완료 작업
+## 최근 완료 작업 — Telegram 운영 화면·주문 바로가기
 
-- yfinance 일봉 조회 장애 내성 강화와 SOXL 일시 조회 실패 fallback 검증을 완료했습니다.
-- 최신 Yahoo adjusted history 변화에 맞춘 canonical guard를 제한적으로 조정했고, V3.2.2 전략·주문 계약은 변경하지 않았습니다.
-- 기준 검증 결과는 CAGR 약 **21.89%**, MDD 약 **-30.94%**, Sharpe 약 **0.987**이며 초기 위험예산 $50,000, HWM75, 최초진입 50→75→100 계약도 통과했습니다.
-- Quality Gate·Security Gate·JDSS V3 Backtest 통과 후 최신 main을 Oracle forced dry-run으로 배포했고 smoke test 성공을 확인했습니다.
+- PR #194에서 Telegram 운영 화면의 내부 개발용 표현을 실제 운용자가 바로 이해할 수 있는 표현으로 정리했습니다.
+- `배분`, `오버레이`, `allocation`, `위험증가 BUY` 중심 표현을 `목표비중`, `현재 보유비중`, `보유/목표`, `추가매수 판단`, `매수 주문 승인 대기` 중심으로 바꿨습니다.
+- 대시보드에 `매수 승인 대기 보기`, `미체결 주문 보기` 바로가기 버튼을 추가해 `/signal`, `/order` 명령을 직접 입력하지 않아도 주문 흐름을 확인할 수 있게 했습니다.
+- 기존 매수 흐름은 `매수 주문 검토하기` → 최신 가격·수량·현금·세션 재검증 → `종목 N주 모의/실매수 실행`의 2단계 승인과 주문번호·상태·체결수량 회신을 그대로 유지합니다.
+- Toss OpenAPI 실제 주문 어댑터는 유지하되 V3.2.2 live hard lock은 변경하지 않았습니다.
+- Telegram 포맷·버튼 테스트, 전체 Quality Gate, Security Gate, JDSS V3 canonical Backtest를 통과했습니다.
+- PR #194 병합 후 최신 기능 main을 Oracle forced dry-run으로 배포했고 release별 venv, DB snapshot, 자동 rollback, pinned SSH host key, live 잠금, Toss read-only smoke를 모두 통과했습니다.
 
 ## 현재 안전장치
 
@@ -33,16 +36,9 @@
 - 최초진입 50% → 75% → 100%, 단계별 전량 체결 후 최소 3 미국 거래일, 단계 개방은 운영자 확인 필요
 - 배포 workflow는 최신 `main`만 받아 pinned SSH·강제 dry-run·rollback-safe smoke를 검증
 
-## 현재 개발 상태 — Telegram 운영 화면 정리
+## 현재 개발 상태
 
-- 활성 개발 브랜치: **`feature/telegram-operator-ux`**
-- Draft PR: **#194 `feat: simplify Telegram operator UX and order shortcuts`**
-- 목적: 내부 개발용 표현인 `배분`, `오버레이`, `allocation`, `위험증가 BUY`를 운영자가 바로 이해할 수 있는 `목표비중`, `보유/목표`, `추가매수 판단`, `매수 주문 승인 대기` 중심 표현으로 정리합니다.
-- 대시보드에 `매수 승인 대기 보기`, `미체결 주문 보기` 바로가기 버튼을 추가했습니다.
-- 기존 매수 흐름은 이미 `매수 주문 검토하기` → 최신 가격·수량·현금·세션 재검증 → `종목 N주 모의/실매수 실행`의 2단계 승인과 주문번호·상태·체결수량 회신을 지원함을 확인했습니다.
-- Toss OpenAPI `place_order()` 어댑터도 구현돼 있지만, V3.2.2 실제 live 주문은 애플리케이션 hard lock과 forced dry-run으로 계속 차단합니다. 이 UX PR은 live 잠금을 해제하지 않습니다.
-- `docs/TELEGRAM_BOT_GUIDE.md`와 Telegram 포맷·버튼 테스트를 같은 PR에서 동기화했습니다.
-- 현재 PR은 **아직 main 미병합 / Oracle 미배포** 상태이며 최종 CI 확인 중입니다.
+Telegram 운영 화면·주문 바로가기 작업은 **완료** 상태입니다. 기능 main과 Oracle forced dry-run runtime이 일치하며, 실거래 잠금은 유지됩니다.
 
 ## live 전환 전에만 남아 있는 항목
 
@@ -52,7 +48,7 @@
 
 ## 바로 다음 작업
 
-1. PR #194의 Quality Gate·Security Gate·JDSS V3 canonical Backtest를 모두 통과시킵니다.
-2. Telegram 새 버튼과 문구가 관리자 1:1 권한·기존 2단계 승인·stale callback 안전장치를 보존하는지 최종 확인합니다.
-3. 병합 승인 전까지 PR은 Draft로 유지하고 Oracle에는 배포하지 않습니다.
+1. 다음 미국 시장일 오전 7시 일일 운용보고에서 새 Telegram 용어와 대시보드 버튼 표시를 확인합니다.
+2. `매수 승인 대기 보기`, `미체결 주문 보기` 버튼이 실제 운영 메시지에서도 정상 동작하는지 forced dry-run 상태에서 확인합니다.
+3. 주문 감시·정합성 점검·안전 경고의 기존 주기가 유지되는지 운영 로그에서 확인합니다.
 4. 별도 live 승인 전까지 실제 Toss 주문 잠금을 해제하지 않습니다.
