@@ -1,1 +1,0 @@
-Scope locked: simple QLD/SSO rotation rules only. No production strategy changes and no parameter tuning beyond the predeclared Phase 1 candidates.
