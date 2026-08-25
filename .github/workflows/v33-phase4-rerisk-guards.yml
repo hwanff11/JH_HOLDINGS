@@ -1,0 +1,49 @@
+name: V3.3 Phase4 Re-Risk Guard Sweep
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_v33_phase4_rerisk_guards.py"
+      - "scripts/research_v33_phase4_runner.py"
+      - "scripts/research_v33_phase4_robustness.py"
+      - "scripts/research_v33_phase3_rerisk.py"
+      - "scripts/research_v33_phase3_robustness.py"
+      - ".github/workflows/v33-phase4-rerisk-guards.yml"
+      - "src/**"
+      - "configs/**"
+  workflow_dispatch:
+
+jobs:
+  phase4-rerisk-guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: >-
+          ruff check
+          scripts/research_v33_phase4_rerisk_guards.py
+          scripts/research_v33_phase4_runner.py
+          scripts/research_v33_phase4_robustness.py
+      - name: Run Phase4 sweep
+        run: |
+          python scripts/research_v33_phase4_runner.py \
+            --output-json reports/v33-phase4-rerisk-guards.json \
+            --output-md reports/v33-phase4-rerisk-guards.md
+      - name: Run Phase4 robustness
+        run: python scripts/research_v33_phase4_robustness.py
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: v33-phase4-rerisk-guards
+          path: |
+            reports/v33-phase4-rerisk-guards.json
+            reports/v33-phase4-rerisk-guards.md
+            reports/v33-phase4-robustness.json
+            reports/v33-phase4-robustness.md
