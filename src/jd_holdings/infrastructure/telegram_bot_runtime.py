@@ -211,6 +211,8 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
                     portfolio_run = self.portfolio_service.run_month_end()
                     if portfolio_run is not None:
                         for event in portfolio_run.events:
+                            if portfolio_run.signals and "매수 승인 대기" in event:
+                                continue
                             self._send(f"📊 {html.escape(event)}")
                         self.notify_portfolio_buy_batch_ready(portfolio_run.signals)
                 except Exception as exc:
