@@ -48,7 +48,7 @@ def _v322_bot_commands() -> list[telebot.types.BotCommand]:
         telebot.types.BotCommand("status", "종목별 목표·보유 상세"),
         telebot.types.BotCommand("score", "TQQQ/SOXL 추가매수 판단"),
         telebot.types.BotCommand("history", "최근 추가매수 점수"),
-        telebot.types.BotCommand("signal", "개별 매수 주문 승인"),
+        telebot.types.BotCommand("signal", "매수 주문 승인 대기"),
         telebot.types.BotCommand("backtest", "최초진입 포함 백테스트"),
         telebot.types.BotCommand("guide", "V3.2.2 전략·최초진입 설명"),
         telebot.types.BotCommand("order", "미체결 주문 현황"),
