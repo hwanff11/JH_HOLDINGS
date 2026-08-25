@@ -1,0 +1,42 @@
+name: QLD Only Simple Research
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_qld_only_simple_phase10.py"
+      - ".github/workflows/qld-only-simple-research.yml"
+      - "scripts/research_qld_sso_alpha.py"
+      - "scripts/research_qld_sso_vs_v322.py"
+      - "strategy.yaml"
+      - "src/**"
+  workflow_dispatch:
+
+jobs:
+  qld-only-simple:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: |
+          ruff check scripts/research_qld_only_simple_phase10.py \
+            scripts/research_qld_sso_alpha.py \
+            scripts/research_qld_sso_vs_v322.py
+      - name: Run Phase 10 simple QLD sweep
+        run: |
+          python scripts/research_qld_only_simple_phase10.py \
+            --output-json reports/qld-only-simple-phase10.json \
+            --output-md reports/qld-only-simple-phase10.md
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: qld-only-simple-phase10
+          path: |
+            reports/qld-only-simple-phase10.json
+            reports/qld-only-simple-phase10.md
