@@ -4,6 +4,7 @@ import json
 from datetime import date
 from pathlib import Path
 
+import research_v33_phase3_rerisk as p3
 import research_v33_phase3_robustness as p3r
 import research_v33_phase4_rerisk_guards as p4
 
@@ -70,7 +71,7 @@ def main() -> None:
 
     for cost, results in results_by_cost.items():
         payload["cost_stress_full"][cost] = {
-            name: p4.window_metrics(
+            name: p3.window_metrics(
                 result,
                 "2011-01-01",
                 None,
@@ -101,7 +102,10 @@ def main() -> None:
     lines.append("|연도|" + "|".join(CANDIDATES) + "|")
     lines.append("|---:|" + "|".join(["---:"] * len(CANDIDATES)) + "|")
     for year in years:
-        vals = [payload["candidates"][name]["annual_returns_pct"].get(year, 0.0) for name in CANDIDATES]
+        vals = [
+            payload["candidates"][name]["annual_returns_pct"].get(year, 0.0)
+            for name in CANDIDATES
+        ]
         lines.append(f"|{year}|" + "|".join(f"{value:+.2f}%" for value in vals) + "|")
 
     Path("reports/v33-phase4-robustness.json").write_text(
