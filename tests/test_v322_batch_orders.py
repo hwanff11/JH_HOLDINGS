@@ -363,7 +363,7 @@ def test_review_failure_cleans_created_execution_approvals(monkeypatch):
 
     class _FailingReview(_Trading):
         def consume_review(self, approval_id, token):
-            if approval_id == 202:
+            if approval_id == 102:
                 raise RuntimeError("quote lookup failed")
             return super().consume_review(approval_id, token)
 
