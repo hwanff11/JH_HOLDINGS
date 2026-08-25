@@ -1,1 +1,0 @@
-Execute via GitHub Actions workflow `QLD SSO Alpha Research` on the draft pull request.
