@@ -3,8 +3,9 @@ from __future__ import annotations
 import html
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
+from .market_clock import session_is_allowed
 from .telegram_bot import (
     SEOUL_TZ,
     _daily_analysis_is_due,
@@ -86,6 +87,26 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
 
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
         super()._send(_operator_text(text), markup=markup, chat_id=chat_id)
+
+    def _prepare_today_buy_batch(self):
+        """Fail closed with a readable state before creating any approvals."""
+        now_kst = datetime.now(SEOUL_TZ)
+        if _is_toss_order_maintenance_window(now_kst):
+            return (
+                "🛠️ <b>[오늘 주문 · 토스 주문 점검시간]</b>\n\n"
+                "한국시간 08:50~08:59에는 미국주식 주문 취소·리셋 구간이므로 "
+                "새 매수 검토를 만들지 않습니다. 09:00 이후 다시 확인해 주세요.",
+                None,
+            )
+        session = self.market_clock.classify_session(datetime.now(UTC))
+        if not session_is_allowed(session, self.config):
+            return (
+                "🕒 <b>[오늘 주문 · 주문 가능시간 대기]</b>\n\n"
+                f"현재 세션 <code>{html.escape(session)}</code>은 V3.2.2 주문 허용시간이 아닙니다.\n"
+                "전략 목표는 유지되며 주문 가능한 세션에서 다시 검토해 주세요.",
+                None,
+            )
+        return super()._prepare_today_buy_batch()
 
     def notify_startup_reconciliation(self, mismatches: dict[str, list[str]]) -> None:
         if not mismatches:
@@ -179,30 +200,41 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
                         delay_minutes=self.config.scheduler.signal_delay_minutes
                     )
                 except Exception as exc:
-                    self._notify_runtime_error("MARKET_CLOCK_ERROR", "거래일 계산 오류", exc)
+                    self._notify_runtime_error(
+                        "MARKET_CLOCK_ERROR",
+                        "거래일 계산 오류",
+                        exc,
+                    )
 
             if self.portfolio_service is not None and completed is not None:
                 try:
                     portfolio_run = self.portfolio_service.run_month_end()
                     if portfolio_run is not None:
                         for event in portfolio_run.events:
+                            if portfolio_run.signals and "매수 승인 대기" in event:
+                                continue
                             self._send(f"📊 {html.escape(event)}")
-                        for signal_id in portfolio_run.signals:
-                            self._send_signal(self.repository.get_signal(signal_id))
+                        self.notify_portfolio_buy_batch_ready(portfolio_run.signals)
                 except Exception as exc:
                     self._notify_runtime_error(
-                        "PORTFOLIO_SCHEDULER_ERROR", "V3.2.2 배분 점검 오류", exc
+                        "PORTFOLIO_SCHEDULER_ERROR",
+                        "V3.2.2 배분 점검 오류",
+                        exc,
                     )
 
             if completed is not None:
                 try:
-                    last_analysis = self.repository.get_system_value("last_analysis_trade_date")
+                    last_analysis = self.repository.get_system_value(
+                        "last_analysis_trade_date"
+                    )
                     if last_analysis != completed.isoformat():
                         results = self.analysis_service.analyze_all()
                         self.notify_new_signals(results)
                 except Exception as exc:
                     self._notify_runtime_error(
-                        "ANALYSIS_SCHEDULER_ERROR", "일일 전략 분석 오류", exc
+                        "ANALYSIS_SCHEDULER_ERROR",
+                        "일일 전략 분석 오류",
+                        exc,
                     )
 
             monitor_due = (
@@ -217,12 +249,21 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
                     for event in self.order_monitor.run_once():
                         self._send(f"ℹ️ {html.escape(event)}")
                 except Exception as exc:
-                    self._notify_runtime_error("ORDER_MONITOR_ERROR", "주문 모니터 오류", exc)
+                    self._notify_runtime_error(
+                        "ORDER_MONITOR_ERROR",
+                        "주문 모니터 오류",
+                        exc,
+                    )
 
                 if self.idle_cash_manager is not None:
                     try:
                         for event in self.idle_cash_manager.refresh_orders():
-                            self._send(_format_idle_cash_event(event, self.settings.trading_mode))
+                            self._send(
+                                _format_idle_cash_event(
+                                    event,
+                                    self.settings.trading_mode,
+                                )
+                            )
                         for quote in self.trading_service.resume_cash_releases():
                             self._send(
                                 f"💵 <b>[{quote.symbol} SGOV 현금화 완료]</b>\n"
@@ -231,7 +272,9 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
                             self._send_final_quote(quote)
                     except Exception as exc:
                         self._notify_runtime_error(
-                            "IDLE_CASH_MONITOR_ERROR", "SGOV 주문 점검 오류", exc
+                            "IDLE_CASH_MONITOR_ERROR",
+                            "SGOV 주문 점검 오류",
+                            exc,
                         )
 
                 try:
@@ -242,7 +285,9 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
                         self._send_reconciliation_alert(symbol, issues)
                 except Exception as exc:
                     self._notify_runtime_error(
-                        "RECONCILIATION_ERROR", "계좌 정합성 점검 오류", exc
+                        "RECONCILIATION_ERROR",
+                        "계좌 정합성 점검 오류",
+                        exc,
                     )
                 self._last_monitor = time.monotonic()
 
@@ -254,14 +299,25 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
             if cash_due:
                 try:
                     for event in self.idle_cash_manager.run_once():
-                        self._send(_format_idle_cash_event(event, self.settings.trading_mode))
+                        self._send(
+                            _format_idle_cash_event(
+                                event,
+                                self.settings.trading_mode,
+                            )
+                        )
                 except Exception as exc:
                     self._notify_runtime_error(
-                        "IDLE_CASH_SWEEP_ERROR", "SGOV 유휴자금 운용 오류", exc
+                        "IDLE_CASH_SWEEP_ERROR",
+                        "SGOV 유휴자금 운용 오류",
+                        exc,
                     )
                 self._last_idle_cash_sweep = time.monotonic()
 
             try:
                 self.repository.expire_stale_signals()
             except Exception as exc:
-                self._notify_runtime_error("SIGNAL_EXPIRY_ERROR", "신호 만료 처리 오류", exc)
+                self._notify_runtime_error(
+                    "SIGNAL_EXPIRY_ERROR",
+                    "신호 만료 처리 오류",
+                    exc,
+                )

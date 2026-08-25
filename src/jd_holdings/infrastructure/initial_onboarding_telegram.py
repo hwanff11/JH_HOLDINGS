@@ -91,6 +91,75 @@ class InitialOnboardingTelegramBotApp(RuntimeTelegramBotApp):
             chat_id=chat_id,
         )
 
+    def _no_signal_message(self) -> str:
+        """Describe onboarding waits without comparing against the uncapped 100% target."""
+        service = self.onboarding_service
+        if service is None:
+            return super()._no_signal_message()
+        snapshot = service.onboarding_snapshot()
+        status = str(snapshot["status"])
+        if status == STATUS_NOT_STARTED:
+            return (
+                "🪜 <b>[오늘 주문 · 최초진입 시작 전]</b>\n\n"
+                "최초진입 50% 한도가 아직 열리지 않았습니다. "
+                "<code>/onboarding</code>에서 상태를 확인해 주세요."
+            )
+        if status != STATUS_ACTIVE:
+            return super()._no_signal_message()
+
+        effective = {
+            str(symbol): int(quantity)
+            for symbol, quantity in dict(snapshot.get("effective_targets") or {}).items()
+        }
+        current = {
+            str(core["symbol"]): int(core.get("qty") or 0)
+            for core in self.repository.core_positions()
+        }
+        needs_sell = [
+            symbol
+            for symbol, target in effective.items()
+            if current.get(symbol, 0) > target
+        ]
+        needs_buy = [
+            symbol
+            for symbol, target in effective.items()
+            if current.get(symbol, 0) < target
+        ]
+        if needs_sell:
+            return (
+                "⏳ <b>[오늘 주문 · 최초진입 위험축소 준비 중]</b>\n\n"
+                f"현재 단계 목표보다 많이 보유한 종목: <code>{', '.join(needs_sell)}</code>\n"
+                "자동 SELL 생성·처리를 기다리고 있습니다."
+            )
+        if needs_buy:
+            return (
+                "⏳ <b>[오늘 주문 · 최초진입 매수신호 생성 대기]</b>\n\n"
+                f"현재 단계 목표보다 부족한 종목: <code>{', '.join(needs_buy)}</code>\n"
+                "현재 단계 BUY 승인 신호 생성을 기다리고 있습니다."
+            )
+
+        stage = int(snapshot["stage"])
+        total = int(snapshot["total_stages"])
+        if stage < total:
+            if bool(snapshot.get("next_stage_ready")):
+                return (
+                    "✅ <b>[오늘 주문 · 최초진입 현재 단계 완료]</b>\n\n"
+                    f"현재 <code>{stage}/{total}</code>단계 목표수량을 모두 채웠습니다.\n"
+                    "추가 BUY가 필요한 상태가 아니라 다음 단계 한도를 열 수 있는 상태입니다. "
+                    "<code>/onboarding</code>에서 확인해 주세요."
+                )
+            remaining = int(snapshot.get("sessions_remaining") or 0)
+            return (
+                "🕒 <b>[오늘 주문 · 최초진입 단계 대기]</b>\n\n"
+                f"현재 <code>{stage}/{total}</code>단계 목표수량은 모두 채웠습니다.\n"
+                f"다음 단계까지 미국 거래일 <code>{remaining}일</code>을 기다리는 정상 상태입니다."
+            )
+        return (
+            "✅ <b>[오늘 주문 · 최초진입 최종단계 목표 완료]</b>\n\n"
+            "현재 활성 단계의 목표수량을 모두 채웠습니다. "
+            "최초진입 완료상태 반영을 확인하고 일반 운용으로 전환합니다."
+        )
+
     def _register_handlers(self) -> None:
         super()._register_handlers()
         bot = self.bot
@@ -136,8 +205,7 @@ class InitialOnboardingTelegramBotApp(RuntimeTelegramBotApp):
                 if result is not None:
                     for event in result.events:
                         self._send(f"🪜 {html.escape(event)}")
-                    for signal_id in result.signals:
-                        self._send_signal(self.repository.get_signal(signal_id))
+                    self.notify_portfolio_buy_batch_ready(result.signals)
             except Exception as exc:
                 LOGGER.exception("최초진입 단계 처리 실패")
                 bot.answer_callback_query(call.id, str(exc), show_alert=True)
@@ -225,7 +293,8 @@ class InitialOnboardingTelegramBotApp(RuntimeTelegramBotApp):
             [
                 "",
                 "🛡️ <b>안전 원칙</b>",
-                "• 각 단계의 BUY는 기존과 동일하게 2단계 Telegram 승인이 필요합니다.",
+                "• 단계 버튼은 매수 한도만 열며 주문을 제출하지 않습니다.",
+                "• 실제 BUY는 ‘오늘 주문 한번에 검토’에서 묶어 승인하거나 /signal로 개별 승인합니다.",
                 "• 시장이 악화되어 목표가 줄면 위험축소 SELL은 자동으로 먼저 실행합니다.",
                 "• 이전 메시지의 단계 버튼은 상태가 바뀌면 무효 처리합니다.",
                 f"• {total}차 완료 뒤에는 이 최초진입 로직이 다시 시작되지 않습니다.",

@@ -75,6 +75,7 @@ def test_final_runtime_uses_operator_friendly_terms_and_hides_sgov_menu_line():
 
 def test_v322_commands_avoid_internal_operator_jargon():
     commands = {item.command: item.description for item in _v322_bot_commands()}
+    assert commands["today"] == "오늘 주문 한번에 검토"
     assert commands["portfolio"] == "목표비중·위험한도 현황"
     assert commands["status"] == "종목별 목표·보유 상세"
     assert commands["score"] == "TQQQ/SOXL 추가매수 판단"
@@ -97,12 +98,14 @@ def test_dashboard_buttons_are_actionable_and_plain_language():
         for row in payload["inline_keyboard"]
         for button in row
     ]
+    assert "🧾 오늘 주문 한번에 검토" in labels
     assert "📊 QQQ 보유/목표" in labels
     assert "📊 TQQQ 보유/목표" in labels
     assert "🎯 TQQQ 추가매수 판단" in labels
     assert "🎯 SOXL 추가매수 판단" in labels
-    assert "🛒 매수 승인 대기 보기" in labels
+    assert "🛒 개별 매수 보기" in labels
     assert "📋 미체결 주문 보기" in labels
+    assert "ops|today" in callbacks
     assert "ops|signals" in callbacks
     assert "ops|orders" in callbacks
     assert all("배분" not in label for label in labels)
