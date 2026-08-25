@@ -1,59 +1,104 @@
 # JDSS 대표 버전과 연구 역사
 
-이 문서는 과거 문서·연구 브랜치 수십 개를 대신하는 **append-only 역사 색인**입니다. **현재 전략을 결정하는 문서가 아닙니다.** 현재 기준은 [`strategy.yaml`](../strategy.yaml), [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md), 현재 작업 상태는 [`CURRENT_WORK.md`](../CURRENT_WORK.md)입니다.
+이 문서는 과거 버전·운영결정·대표 연구결론을 찾기 위한 **append-only 역사 색인**입니다. 현재 전략을 정의하지 않습니다.
 
-새 릴리즈마다 새 Markdown을 만들지 않고 아래 표에 한 항목만 추가합니다. 상세 코드·설정·당시 문서는 Git tag, 병합 PR과 Actions artifact에서 복구하며, 기존 항목에 `현행`이라는 변하는 상태표시는 붙이지 않습니다.
+현재 계약은 [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md)와 [`../strategy.yaml`](../strategy.yaml), 현재 배포·live 상태는 [`../CURRENT_WORK.md`](../CURRENT_WORK.md)가 기준입니다. 상세 과거 원본은 Git tag, 병합 PR, 연구 PR과 Actions artifact에서 복구합니다.
 
-## 대표 버전
+## 1. 대표 릴리즈
 
 | 버전 | 핵심 변화 | 보존 위치 |
 |---|---|---|
 | v1.1.2 | 초기 점수·분할매수 계약의 회귀 기준 | [`configs/strategy_v1.1.2.yaml`](../configs/strategy_v1.1.2.yaml) |
-| v2.2.2 | SGOV 현금화 재개와 2단계 승인까지 완성한 v2 대표판 | Git tag `v2.2.2` |
-| v3.0.0 | 월간 쌍발 코어 + 5% 부스터를 처음 도입한 v3 기준선 | Git tag `v3.0.0` |
-| v3.1.1 | $50,000 고정원금·SGOV OFF를 도입한 전환판 | Git history와 병합 PR |
-| v3.2.2 | QQQ 동적노출·RS6M·HWM75·5% virtual overlay 도입 | Git tag `v3.2.2` |
+| v2.2.2 | SGOV 현금화 재개와 BUY 2단계 승인까지 완성한 v2 대표판 | Git tag `v2.2.2` |
+| v3.0.0 | 월간 코어 + 5% 부스터를 도입한 v3 기준선 | Git tag `v3.0.0` |
+| v3.1.1 | $50,000 고정원금·SGOV OFF를 도입한 전환판 | Git history·병합 PR |
+| v3.2.2 | QQQ 동적노출·RS6M·HWM75·5% virtual 추가 레버리지 도입 | Git tag `v3.2.2` |
 
-태그는 해당 시점의 코드·설정·문서를 함께 보존합니다. 따라서 현재 `main`에 옛 문서를 복제해 둘 필요가 없습니다.
+태그는 당시 코드·설정·문서를 함께 보존하므로 현재 `main`에 버전별 Markdown 복사본을 두지 않습니다.
 
-## V3.2.2 채택 기록
+## 2. V3.2.2 채택 결정
 
-V3.1.1은 최대낙폭이 비교적 낮았지만 평균노출 약 21%로 자금 활용과 장기 수익이 낮았습니다. 후속 연구는 단순 고정 레버리지 대신 QQQ 추세에 따라 0.5/1.0/1.25/1.5배를 오가고, 반도체 상대강도가 있을 때만 SOXL을 섞는 구조를 비교했습니다.
+V3.1.1은 최대낙폭이 비교적 낮았지만 평균 시장노출이 낮아 장기 자금 활용과 수익이 제한적이었습니다. 후속 연구는 단순 고정 레버리지 대신 QQQ 추세에 따라 0.5/1.0/1.25/1.5x를 오가고, 반도체 상대강도가 있을 때만 SOXL을 섞는 구조를 검증했습니다.
 
-최종 V3.2.2는 다음 이유로 선택됐습니다.
+V3.2.2를 채택한 핵심 이유:
 
-- production-equivalent 기준 CAGR 22.37%, MDD -30.93%, Sharpe 1.004
-- QQQ 참고값 18.95%, -35.12%, 0.941 대비 위험조정 성과 개선
-- SOXL 비중·RS 기간·대체 proxy·월 reset 날짜 변화에서 완만한 결과
-- 월중 고변동 감속과 SOXL→TQQQ one-way exit로 가속보다 후퇴를 쉽게 설계
-- 이익의 25%를 추가 위험에서 제외하는 HWM75
+- QQQ 대비 장기 CAGR과 위험조정 성과 개선이 확인됨
+- SOXL sleeve·RS 기간·대체 proxy·월 reset 날짜의 주변값에서도 결과가 즉시 붕괴하지 않음
+- 월중 고변동 감속과 SOXL→TQQQ one-way exit로 위험증가보다 위험축소를 쉽게 설계
+- HWM75로 최고점 이익의 25%를 추가 위험 확대에서 제외
+- BUY는 사람 승인, 위험축소 SELL은 자동이라는 운영 경계를 유지
 
-운영 계약은 모든 위험증가 BUY를 사람의 2단계 승인 뒤 실행하는 반자동 방식으로 두고, 위험축소 SELL은 자동화 대상으로 유지했습니다. production 승격과 live 활성화는 분리했으며, 이 릴리즈의 운영은 forced dry-run으로 시작했습니다.
+당시 채택 시점의 정확한 수치는 당시 PR·artifact에 보존합니다. 데이터 공급자의 adjusted history가 이후 소폭 수정될 수 있으므로 **현재 재현 수치는 [`STRATEGY_GUIDE.md`](STRATEGY_GUIDE.md)**가 소유합니다.
 
-## 대표 운영·문서 결정
+## 3. 대표 운영 결정
 
-| 시점 | 결정 | 이유와 보존 위치 |
-|---|---|---|
-| v3.2.2 | QQQ/TQQQ/SOXL을 하나의 allocation 계약과 HWM75 위험예산으로 관리 | 정확한 현재 계약은 [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md)와 [`strategy.yaml`](../strategy.yaml) |
-| v3.2.2 | BUY 2단계 승인, 위험축소 SELL 자동, UNKNOWN·불일치 시 SAFE_MODE | 보안 불변식은 [`infra/SECURITY.md`](infra/SECURITY.md) |
-| v3.2.2 | forced dry-run 모의원장과 실제 Toss read-only 조회를 분리 | 실제 계좌를 모의 보유수량으로 오인하거나 자동 채택하지 않기 위함 |
-| v3.2.2 전환 | 기존 dry-run SQLite를 `v322-migration` 이름으로 백업하고 새 allocation 원장을 초기화 | 완료된 일회성 전환이며, 다음 릴리즈의 일반 배포 절차로 재사용하지 않음 |
-| v3.2.2 운영 보강 | 공용 백테스트 runner, Telegram V3.2.2 UX, 고정 목표수량·체결 crash 복구·브로커 응답 검증·실계좌 read-only preflight 도입 | 병합 PR [#137](https://github.com/hwanff11/JH_HOLDINGS/pull/137); live hard lock 유지 |
-| JH 런타임 이름변경 | 보호된 배포 설정의 운영 대상·서비스 식별자를 rollback-safe 이전하고 구 대상을 비활성화 | required checks와 DB·환경·dry-run 잠금·Toss read-only smoke 검증 후 일회성 workflow/script는 제거 |
-| v3.2.2 pre-live hardening | Telegram stale onboarding 차단, release-local venv·DB snapshot·atomic switch·자동 rollback, pinned SSH trust, CI/Security/Backtest 게이트를 적용하고 forced dry-run으로 재배포 | required checks와 forced dry-run 배포 성공; live 잠금 유지 |
-| 문서 정리 | 현행 문서는 고정 파일을 제자리 갱신하고 역사만 이 파일에 추가 | 버전별 복사 문서의 불일치 방지; 전체 규칙은 [`README.md`](README.md) |
+| 결정 | 이유·결과 |
+|---|---|
+| QQQ/TQQQ/SOXL을 하나의 allocation 원장과 HWM75 위험예산으로 관리 | 종목별 독립 전략보다 전체 위험과 현금을 한 경계에서 관리 |
+| 위험축소 SELL 자동 / 위험증가 BUY 승인 | 위험 감소는 지연하지 않고 위험 증가는 사람이 확인 |
+| forced dry-run 모의원장과 실제 Toss read-only 조회 분리 | 모의 보유를 실제 계좌 보유로 오인하지 않기 위함 |
+| release-local venv + DB snapshot + atomic switch + 자동 rollback | 배포 중단점과 DB 복구를 명확히 함 |
+| pinned SSH host trust | 새 runner가 임의 host key를 즉석 신뢰하지 않게 함 |
+| 현재판 문서를 제자리 갱신 | 버전별 Markdown 복제와 불일치 방지 |
 
-## 대표적인 미채택 연구
+### 2026-08-25 — 오늘 주문 일괄 검토·순차 실행
 
-PR #27의 `SEMIMONTHLY_BAND_H05`와 격주 밴드형 쌍발엔진은 일부 구간 성과가 좋았지만 시작 위상에 민감했고, 5년 순환구간·paired bootstrap·MDD 승격 기준을 통과하지 못했습니다. 복잡한 후보 대신 더 단순한 `MONTHLY_H05` 기준선을 선택했습니다.
+PR #197에서 Telegram BUY 운영 UX를 종목별 반복승인 중심에서 **`오늘 주문 한번에 검토` → `N건 순차 실행`** 중심으로 정리했습니다.
 
-V3.2.2 후보 연구에서도 SOXL 슬리브, RS lookback, 월 reset 날짜, 실행비용을 폭넓게 비교했습니다. 최종값은 단일 최고점만 좇기보다 주변 값에서도 성과가 급격히 무너지지 않는 조합으로 동결했습니다.
+전략 산식은 변경하지 않았으며 다음 운영리스크를 추가로 방어했습니다.
 
-## 남아 있는 연구 경고
+- stale 전략계산과 진짜 주문없음 구분
+- 다음 거래일 / target_qty 준비 상태 구분
+- SELL-first와 최종 실행 직전 reconciliation
+- 전체 BUY 합계 HWM75 사전·최종 재검사
+- 중복 batch·동시 callback 직렬화
+- 검토 중 예외 approval cleanup
+- 순차 제출 중 fail-closed 중단
+- onboarding 단계대기 오인 방지
+- batch lifecycle 감사로그
 
-- 2023+ 데이터는 후보 선택 중 반복 관찰되어 pristine OOS가 아닙니다.
-- CSCV-style PBO 추정은 약 64.29%입니다.
-- 2025년처럼 QQQ에 뒤지는 해가 있습니다.
-- 이 경고 때문에 전략을 더 복잡하게 튜닝하지 않고 V3.2.2를 동결했으며 live는 잠가 두었습니다.
+기능은 forced dry-run으로 배포했고 **live hard lock은 유지**했습니다. 상세 현재 계약은 공식 사양·Telegram 가이드·보안 기준으로 이동했으며 이 역사 문서에는 결정만 남깁니다.
 
-새 연구는 [`research/RESEARCH_PROTOCOL.md`](research/RESEARCH_PROTOCOL.md)를 따르고, 일회성 스크립트와 결과물은 채택되지 않으면 `main`에 누적하지 않습니다. 대표 기각 결론만 이 문서에 한 항목으로 남기고 상세 결과는 해당 PR과 Actions artifact에서 확인합니다.
+## 4. 대표 미채택·SHADOW 연구
+
+### 반월·격주 밴드형 구조
+
+PR #27의 `SEMIMONTHLY_BAND_H05` 등은 일부 구간 수익이 좋았지만 시작 위상에 민감했고 5년 순환구간·paired bootstrap·MDD 승격 기준에서 안정성이 부족했습니다. 복잡도를 늘리는 대신 단순 월간 기준을 유지했습니다.
+
+### V3.3 리밸런싱·재가속 연구
+
+일/주/격주/월 리밸런싱과 제한적 mid-month re-risk를 비교했지만 **월간 reset이 비용·MDD·안정성의 균형에서 계속 강했습니다.** 일부 mid-month 후보는 CAGR을 소폭 높였으나 특정 구간, 특히 whipsaw 환경에서 약해 production 승격 대신 연구 후보로만 남겼습니다.
+
+핵심 교훈은 “더 자주 판단하면 더 빨리 수익을 회복할 것”이라는 직관이 항상 맞지 않으며, **빠른 re-risk가 오히려 whipsaw drawdown을 키울 수 있다**는 점입니다.
+
+### QLD/SSO 및 QLD-only 연구 — PR #193
+
+Production V3.2.2를 건드리지 않고 QLD·SSO와 단순 QLD-only 전략을 단계적으로 검증했습니다.
+
+주요 결론:
+
+- QLD↔SSO 상시 회전은 시스템적 약세장에서 MDD가 과도해 기각
+- SSO는 핵심 alpha 자산으로 보기 어려움
+- V3.2.2의 TQQQ/SOXL을 단순 QLD로 치환한 구조도 production 대체에 실패
+- V3.2.2 + QLD blend는 역사 경로에서 강했지만 paired block bootstrap에서 MDD 우위 재현성이 낮아 SHADOW만 유지
+- 가장 단순한 QLD-only 후보는 **`QLD_VOL10_25_CASH`**
+
+`QLD_VOL10_25_CASH`는 QQQ 10일 연환산 변동성이 25% 미만이면 QLD 100%, 25% 이상이면 현금 100%, 위험회피 후 재진입은 월 reset에서만 허용하는 단순 구조입니다.
+
+역사적 실제 경로에서는 높은 CAGR·Calmar와 약 -30% 수준 MDD를 보였지만:
+
+- 10일/25% 주변 parameter plateau가 넓지 않음
+- 최근 2023+ 구간에서 V3.2.2보다 수익이 낮음
+- paired monthly block bootstrap에서 MDD·Sharpe 동시우위 재현성이 낮음
+
+따라서 **production 대체가 아니라 독립 SHADOW 후보**로 보관했습니다. 상세 Phase 1~13 수치와 스크립트는 Draft 연구 PR #193과 Actions artifact에 남깁니다.
+
+## 5. 연구에서 반복 확인한 경고
+
+- 2023+ 데이터는 여러 후보 연구에서 반복 관찰되어 pristine OOS가 아님
+- 단일 최고 파라미터보다 주변값의 plateau와 worst-window가 중요
+- 실제 역사경로의 낮은 MDD가 경로 재배열에서도 재현되는지 별도 확인 필요
+- 높은 CAGR만으로 production 대체를 결정하지 않음
+- 복잡한 조건 추가는 수익 향상 자체가 아니라 **새로운 구조적 가설을 검증할 때만** 허용
+
+새 연구는 [`research/RESEARCH_PROTOCOL.md`](research/RESEARCH_PROTOCOL.md)를 따릅니다. 미채택 상세 결과는 `main`에 별도 보고서로 복사하지 않고 연구 PR·artifact에 보존합니다.
