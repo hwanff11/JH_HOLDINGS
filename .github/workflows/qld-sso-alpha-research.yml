@@ -7,6 +7,7 @@ on:
       - "scripts/research_qld_sso_alpha_phase2.py"
       - "scripts/research_qld_sso_alpha_phase3.py"
       - "scripts/research_qld_sso_vs_v322.py"
+      - "scripts/research_qld_sso_vs_v322_phase5.py"
       - ".github/workflows/qld-sso-alpha-research.yml"
       - "src/**"
       - "configs/**"
@@ -30,7 +31,8 @@ jobs:
           ruff check scripts/research_qld_sso_alpha.py \
             scripts/research_qld_sso_alpha_phase2.py \
             scripts/research_qld_sso_alpha_phase3.py \
-            scripts/research_qld_sso_vs_v322.py
+            scripts/research_qld_sso_vs_v322.py \
+            scripts/research_qld_sso_vs_v322_phase5.py
       - name: Run Phase 1 sweep
         run: |
           python scripts/research_qld_sso_alpha.py \
@@ -51,6 +53,11 @@ jobs:
           python scripts/research_qld_sso_vs_v322.py \
             --output-json reports/qld-sso-v322.json \
             --output-md reports/qld-sso-v322.md
+      - name: Run Phase 5 risk-off boundary
+        run: |
+          python scripts/research_qld_sso_vs_v322_phase5.py \
+            --output-json reports/qld-sso-v322-phase5.json \
+            --output-md reports/qld-sso-v322-phase5.md
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -64,3 +71,5 @@ jobs:
             reports/qld-sso-alpha-phase3.md
             reports/qld-sso-v322.json
             reports/qld-sso-v322.md
+            reports/qld-sso-v322-phase5.json
+            reports/qld-sso-v322-phase5.md
