@@ -172,18 +172,18 @@ read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run �
 
 ### Telegram 운영 화면
 
-실제 주문을 만들지 않는 범위에서 다음을 확인합니다.
+배포 직후 자동 smoke는 **상태를 바꾸지 않는 read-only 확인을 우선**합니다.
 
 - `/ping`
 - `/help`
 - `/portfolio`
-- `/today`의 현재 상태 표시
-- `/onboarding`
 - `/account`
 - `/order`
 - `/errors`
 
-`/today`가 `주문 없음 / 대기 / SELL 진행 / 기존 BUY 진행`을 현재 상태에 맞게 표시하는지 확인하되, 배포 smoke를 위해 불필요한 BUY approval을 생성하지 않습니다.
+`/today`는 BUY 후보가 준비돼 있으면 review/execution approval을 생성할 수 있으므로 단순 read-only smoke 명령으로 취급하지 않습니다. `주문 없음 / 대기 / SELL 진행 / 다건 BUY` 화면을 실제로 검증할 필요가 있을 때만 **운영자가 의도적으로 forced dry-run 승인 흐름을 점검하는 별도 시나리오**에서 사용하고, 생성된 batch는 실행·취소·만료 상태까지 확인합니다.
+
+`/onboarding` 역시 단계 개방 callback을 누르지 않는 조회 범위에서만 배포 후 화면을 확인합니다.
 
 ## 10. 재시작 검증
 
