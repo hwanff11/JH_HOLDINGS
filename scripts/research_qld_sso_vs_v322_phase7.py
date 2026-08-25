@@ -101,7 +101,10 @@ def render(payload: dict) -> str:
         f"QLD 후보: CAGR {qld['cagr_pct']:+.2f}% / MDD {qld['mdd_pct']:.2f}% / "
         f"Sharpe {qld['sharpe']:.3f} / Calmar {qld['calmar']:.3f}",
         "",
-        "|QLD sleeve|CAGR|MDD|Sharpe|Calmar|OOS CAGR|OOS MDD|3Y승률|5Y승률|Full 4조건|OOS CAGR+MDD|비용3단계|",
+        (
+            "|QLD sleeve|CAGR|MDD|Sharpe|Calmar|OOS CAGR|OOS MDD|3Y승률|5Y승률|"
+            "Full 4조건|OOS CAGR+MDD|비용3단계|"
+        ),
         "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for row in payload["selection"]:
