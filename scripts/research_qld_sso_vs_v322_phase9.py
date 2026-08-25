@@ -7,7 +7,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
-import research_qld_sso_alpha as p1
 import research_qld_sso_vs_v322 as p4
 
 from jd_holdings.config import load_config
