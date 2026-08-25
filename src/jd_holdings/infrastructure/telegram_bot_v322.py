@@ -22,7 +22,7 @@ def _v322_bot_commands() -> list[telebot.types.BotCommand]:
         telebot.types.BotCommand("status", "종목별 목표·보유 상세"),
         telebot.types.BotCommand("score", "TQQQ/SOXL 추가매수 판단"),
         telebot.types.BotCommand("history", "최근 추가매수 점수"),
-        telebot.types.BotCommand("signal", "매수 승인 대기"),
+        telebot.types.BotCommand("signal", "매수 주문 승인 대기"),
         telebot.types.BotCommand("backtest", "최초진입 포함 백테스트"),
         telebot.types.BotCommand("guide", "V3.2.2 전략·최초진입 설명"),
         telebot.types.BotCommand("order", "미체결 주문 현황"),
@@ -53,7 +53,7 @@ def _v322_runtime_text(text: str) -> str:
         ("가상 오버레이 점수", "추가매수 판단 점수"),
         ("가상 오버레이", "추가 레버리지"),
         ("오버레이 신호", "추가 레버리지 판단"),
-        ("위험증가 BUY 승인 대기", "매수 승인 대기"),
+        ("위험증가 BUY 승인 대기", "매수 주문 승인 대기"),
         ("SGOV는 V3.1.1 계약에서 사용하지 않습니다.", "SGOV는 V3.2.2 계약에서도 사용하지 않습니다."),
         ("SGOV 추정수익", "SGOV 운용수익(OFF)"),
         ("SGOV수익", "SGOV수익(OFF)"),
@@ -139,13 +139,13 @@ class V322TelegramBotApp(TelegramBotApp):
                     signals = self.trading_service.active_signals()
                     if not signals:
                         self._send(
-                            "✅ <b>현재 매수 승인 대기가 없습니다.</b>\n"
+                            "✅ <b>현재 매수 주문 승인 대기가 없습니다.</b>\n"
                             "목표비중과 실제 보유비중은 위 종목 버튼에서 확인할 수 있습니다."
                         )
                     else:
                         for signal in signals:
                             self._send_signal(signal)
-                    answer = f"매수 승인 대기 {len(signals)}건을 확인했습니다."
+                    answer = f"매수 주문 승인 대기 {len(signals)}건을 확인했습니다."
                 elif action == "orders":
                     orders = self.repository.open_orders()
                     self._send(_format_open_orders_shortcut(orders))
