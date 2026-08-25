@@ -78,7 +78,7 @@ def test_v322_commands_avoid_internal_operator_jargon():
     assert commands["portfolio"] == "목표비중·위험한도 현황"
     assert commands["status"] == "종목별 목표·보유 상세"
     assert commands["score"] == "TQQQ/SOXL 추가매수 판단"
-    assert commands["signal"] == "매수 승인 대기"
+    assert commands["signal"] == "매수 주문 승인 대기"
     assert all("allocation" not in value for value in commands.values())
     assert all("오버레이" not in value for value in commands.values())
 
