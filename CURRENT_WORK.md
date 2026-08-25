@@ -8,26 +8,28 @@
 - 공식 릴리즈: **`v3.2.2`**
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
-- Oracle runtime: **최근 배포 기능 revision `14b0ddd4022b12184fff96d39af1e447043b75de` / 서비스 active**
+- PR #197 `feat: add sell-first one-tap daily order workflow`: **병합 완료**
+- PR #197 병합 기능 revision: **`ac773c7a8c95783dc9e44bf6a115d86c924766d3`**
+- Oracle runtime 기능 revision: **`ac773c7a8c95783dc9e44bf6a115d86c924766d3` / 서비스 active**
 - 최근 forced dry-run 배포: **성공 / smoke test 성공**
+- 배포 Actions: **Deploy Oracle Dry Run #56 / run `32807839387` 성공**
+- 배포 검증: **release별 venv·DB snapshot·자동 rollback·SSH host key 고정·live 잠금·Toss read-only smoke 통과**
 - live: **LOCKED OFF**
 - Oracle 환경: **`JDSS_TRADING_MODE=dry_run` / `JDSS_LIVE_CONFIRMATION` empty**
 - 설정 잠금: **`portfolio.live_enabled=false`**
 
-## 현재 개발 상태 — 오늘 주문 일괄 검토/순차 승인 UX
+## 최근 완료 작업 — 오늘 주문 일괄 검토/순차 승인 UX
 
-- Draft PR: **#197**
-- 활성 개발 브랜치: **`feature/telegram-batch-orders`**
-- 목적: 실제 운용자가 종목별 BUY 버튼을 반복해서 누르지 않고 **`오늘 주문 한번에 검토` → `N건 순차 실행` 1회 최종 승인**으로 처리할 수 있게 단순화합니다.
-- 전략 산식·목표비중 계산·HWM75·위험축소 SELL 로직은 변경하지 않았습니다.
-- main 미병합, Oracle 미배포, live LOCKED OFF 상태입니다.
+실제 운용자가 종목별 BUY 버튼을 반복해서 누르지 않고 **`오늘 주문 한번에 검토` → `N건 순차 실행` 1회 최종 승인**으로 처리할 수 있게 운영 UX를 단순화했습니다.
+
+전략 산식·목표비중 계산·HWM75·위험축소 SELL 로직은 변경하지 않았습니다. 변경 범위는 Telegram 운영층, 최초진입 상태 표시, 운영가이드와 회귀/운영리스크 테스트입니다.
 
 ### 사용 흐름
 
 1. `/dashboard` → `오늘 주문 한번에 검토`
 2. 최신 전략 계산·주문시점·미체결 주문·정합성·SAFE_MODE·HWM75 매수가능한도 사전검사
 3. QQQ/TQQQ/SOXL 중 필요한 BUY를 한 화면에서 확인
-4. `오늘 모의/실매수 N건 순차 실행` 1회 최종 승인
+4. `오늘 모의매수 N건 순차 실행` 1회 최종 승인
 5. 각 종목은 기존 TradingService/OrderManager를 통해 순서대로 독립 제출
 6. 중간 실패 시 이후 BUY 중단, 이미 제출된 주문은 임의 rollback하지 않고 실제 주문상태로 추적
 
@@ -52,16 +54,17 @@
 
 ### 검증 결과
 
-최신 기능 head 기준으로 다음 검증을 모두 통과했습니다.
+PR #197 최종 기능 head `e833468bbdd9482b51f6a28d20a34362af984f84` 기준으로 다음 필수 검증을 모두 통과했습니다.
 
-- Ruff ✅
-- 전체 Pytest 및 신규 운영리스크 시나리오 테스트 ✅
-- Config validation ✅
-- CI - Quality Gate ✅
+- CI - Quality Gate **#862** ✅
+- Security **#644** ✅
+- JDSS V3 canonical Backtest **#325** ✅
+- Ruff / 전체 Pytest / Config validation ✅
 - Security Gate / Bandit / CodeQL / Secret scan ✅
-- JDSS V3 canonical Backtest ✅
 
 신규 테스트에는 stale 전략계산, 다음 거래일 대기, 미생성 BUY 신호, SELL 미완료, 합계 HWM75 초과, 동시클릭, 검토 중 예외 cleanup, 최종 즉시 reconciliation 불일치, 중간 QuoteChanged, 중복 callback, 자동알림 통합, 주문시간 차단, 최초진입 단계대기를 포함합니다.
+
+병합 후 Oracle 배포에서는 최신 main `ac773c7a8c95783dc9e44bf6a115d86c924766d3`를 다시 고정 확인한 뒤 focused deployment gate와 smoke를 모두 통과했습니다.
 
 ## 현재 안전장치
 
@@ -91,7 +94,7 @@
 
 ## 바로 다음 작업
 
-1. PR #197은 Draft 상태에서 유지합니다.
-2. 필요 시 main 병합 승인 후 Oracle forced dry-run에 먼저 배포합니다.
-3. 실제 Telegram에서 `주문 없음/대기/SELL 진행/BUY 순차실행/부분실패` 화면을 forced dry-run으로 확인합니다.
-4. 별도 live 승인 전까지 실제 Toss 주문 잠금을 해제하지 않습니다.
+1. Oracle forced dry-run에서 실제 Telegram `주문 없음/대기/SELL 진행/BUY 순차실행/부분실패` 화면을 운용 관점에서 확인합니다.
+2. 신규 일괄 승인 흐름을 일정 기간 forced dry-run으로 soak하며 `/errors`, reconciliation, 주문상태를 관찰합니다.
+3. 문제가 없더라도 별도 live 승인 전까지 실제 Toss 주문 잠금을 해제하지 않습니다.
+4. 전략 연구 PR과 production 운영 변경은 계속 분리합니다.
