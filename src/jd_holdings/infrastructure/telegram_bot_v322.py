@@ -800,6 +800,11 @@ class V322TelegramBotApp(TelegramBotApp):
             try:
                 signal = self.repository.get_signal(signal_id)
             except Exception:
+                telegram_bot_module.LOGGER.warning(
+                    "batch ready notification signal lookup failed: %s",
+                    signal_id,
+                    exc_info=True,
+                )
                 continue
             symbol = str(signal.get("symbol") or "")
             if symbol and symbol not in symbols:
