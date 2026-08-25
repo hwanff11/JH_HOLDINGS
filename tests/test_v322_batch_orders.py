@@ -497,5 +497,6 @@ def test_runtime_and_onboarding_use_batch_notification_not_signal_card_loop():
     )
 
     assert "notify_portfolio_buy_batch_ready(portfolio_run.signals)" in runtime_source
+    assert '"매수 승인 대기" in event' in runtime_source
     assert "for signal_id in portfolio_run.signals" not in runtime_source
     assert "notify_portfolio_buy_batch_ready(result.signals)" in onboarding_source
