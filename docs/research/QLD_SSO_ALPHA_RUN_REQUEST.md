@@ -1,0 +1,1 @@
+Run the research workflow from a draft pull request and inspect the generated JSON/Markdown artifacts before considering any follow-up.
