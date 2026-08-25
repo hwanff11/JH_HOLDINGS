@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "scripts/research_qld_sso_vs_v322_phase7.py"
+      - "scripts/research_qld_sso_vs_v322_phase8_bootstrap.py"
       - ".github/workflows/qld-sso-v322-blend-research.yml"
       - "scripts/research_qld_sso_vs_v322.py"
       - "scripts/research_qld_sso_vs_v322_phase5.py"
@@ -27,6 +28,7 @@ jobs:
       - name: Ruff
         run: |
           ruff check scripts/research_qld_sso_vs_v322_phase7.py \
+            scripts/research_qld_sso_vs_v322_phase8_bootstrap.py \
             scripts/research_qld_sso_vs_v322.py \
             scripts/research_qld_sso_vs_v322_phase5.py \
             scripts/research_qld_sso_alpha.py
@@ -35,6 +37,11 @@ jobs:
           python scripts/research_qld_sso_vs_v322_phase7.py \
             --output-json reports/qld-sso-v322-phase7.json \
             --output-md reports/qld-sso-v322-phase7.md
+      - name: Run Phase 8 paired block bootstrap
+        run: |
+          python scripts/research_qld_sso_vs_v322_phase8_bootstrap.py \
+            --output-json reports/qld-sso-v322-phase8.json \
+            --output-md reports/qld-sso-v322-phase8.md
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -42,3 +49,5 @@ jobs:
           path: |
             reports/qld-sso-v322-phase7.json
             reports/qld-sso-v322-phase7.md
+            reports/qld-sso-v322-phase8.json
+            reports/qld-sso-v322-phase8.md
