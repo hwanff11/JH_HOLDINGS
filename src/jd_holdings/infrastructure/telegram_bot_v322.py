@@ -391,7 +391,7 @@ class V322TelegramBotApp(TelegramBotApp):
                 "검토 후 SAFE_MODE가 활성화되어 전체 매수를 취소했습니다."
             )
 
-        receipts = []
+        results: list[tuple[_BatchBuyItem, object]] = []
         failure: Exception | None = None
         failure_index: int | None = None
         for index, item in enumerate(plan.items):
@@ -400,7 +400,7 @@ class V322TelegramBotApp(TelegramBotApp):
                     item.execution_approval_id,
                     item.execution_token,
                 )
-                receipts.append(receipt)
+                results.append((item, receipt))
                 if receipt.status in {"UNKNOWN", "CANCELED", "REJECTED", "REPLACED"}:
                     failure = RuntimeError(
                         f"{item.symbol} 주문 상태가 {receipt.status}여서 남은 매수를 중단했습니다"
@@ -422,15 +422,15 @@ class V322TelegramBotApp(TelegramBotApp):
 
         mode_text = "모의매수" if self.settings.trading_mode == "dry_run" else "실매수"
         lines = [f"✅ <b>[오늘 {mode_text} 처리 결과]</b>", ""]
-        for receipt in receipts:
+        for item, receipt in results:
             lines.append(
-                f"• <b>{html.escape(receipt.symbol)}</b> "
+                f"• <b>{html.escape(item.symbol)}</b> "
                 f"<code>{telegram_bot_module._quantity(receipt.filled_quantity)} / "
                 f"{telegram_bot_module._quantity(receipt.quantity)}주</code> · "
                 f"<code>{html.escape(receipt.status)}</code> · "
                 f"주문 <code>{html.escape(receipt.broker_order_id)}</code>"
             )
-        if not receipts:
+        if not results:
             lines.append("• 제출 완료된 매수 주문 없음")
 
         if failure is None:
