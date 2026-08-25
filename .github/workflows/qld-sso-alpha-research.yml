@@ -8,6 +8,7 @@ on:
       - "scripts/research_qld_sso_alpha_phase3.py"
       - "scripts/research_qld_sso_vs_v322.py"
       - "scripts/research_qld_sso_vs_v322_phase5.py"
+      - "scripts/research_qld_sso_vs_v322_phase6.py"
       - ".github/workflows/qld-sso-alpha-research.yml"
       - "src/**"
       - "configs/**"
@@ -32,7 +33,8 @@ jobs:
             scripts/research_qld_sso_alpha_phase2.py \
             scripts/research_qld_sso_alpha_phase3.py \
             scripts/research_qld_sso_vs_v322.py \
-            scripts/research_qld_sso_vs_v322_phase5.py
+            scripts/research_qld_sso_vs_v322_phase5.py \
+            scripts/research_qld_sso_vs_v322_phase6.py
       - name: Run Phase 1 sweep
         run: |
           python scripts/research_qld_sso_alpha.py \
@@ -58,6 +60,11 @@ jobs:
           python scripts/research_qld_sso_vs_v322_phase5.py \
             --output-json reports/qld-sso-v322-phase5.json \
             --output-md reports/qld-sso-v322-phase5.md
+      - name: Run Phase 6 re-risk cadence
+        run: |
+          python scripts/research_qld_sso_vs_v322_phase6.py \
+            --output-json reports/qld-sso-v322-phase6.json \
+            --output-md reports/qld-sso-v322-phase6.md
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -73,3 +80,5 @@ jobs:
             reports/qld-sso-v322.md
             reports/qld-sso-v322-phase5.json
             reports/qld-sso-v322-phase5.md
+            reports/qld-sso-v322-phase6.json
+            reports/qld-sso-v322-phase6.md
