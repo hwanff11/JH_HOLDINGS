@@ -15,34 +15,34 @@
 - Oracle 환경: **`JDSS_TRADING_MODE=dry_run` / `JDSS_LIVE_CONFIRMATION` empty**
 - 설정 잠금: **`portfolio.live_enabled=false`**
 
-## 최근 완료 작업 — yfinance 일봉 조회 장애 내성 강화
+## 최근 완료 작업
 
-- 07:00 일일 분석 및 V3.2.2 배분 점검에서 SOXL yfinance 조회가 일시적으로 실패하면 전체 분석이 중단되던 문제를 수정했습니다.
-- yfinance 일봉 조회를 최대 3회 재시도하고 지수 백오프를 적용했습니다.
-- `refresh=true` 실전 분석은 요청한 완결 거래일까지 포함하는 검증된 캐시만 fallback으로 허용하며 stale 데이터로 매매 판단하지 않습니다.
-- `refresh=false` 연구·일반 조회는 기존 캐시 fallback 호환성을 유지합니다.
-- yfinance `repair=True` 경로에 필요한 `scikit-learn` 런타임 의존성을 명시했습니다.
-- 재시도 성공, 최신 캐시 fallback, stale cache 거부 회귀 테스트를 추가했습니다.
-- 최신 Yahoo adjusted history 변화에 따른 canonical CAGR 소폭 변동을 반영해 Backtest CAGR guard를 제한적으로 조정했습니다.
-- 기준 검증 결과: CAGR 약 **21.89%**, MDD 약 **-30.94%**, Sharpe 약 **0.987**. 초기 위험예산 $50,000, HWM75, 최초진입 50→75→100 계약도 통과했습니다.
-- Quality Gate·Security Gate·JDSS V3 Backtest 모두 통과 후 PR #185를 병합했습니다.
-- 최신 main을 Oracle forced dry-run으로 배포했고 배포 및 smoke test 전체 성공을 확인했습니다.
-- 전략·배분·주문 로직은 변경하지 않았으며 live 잠금은 그대로 유지합니다.
+- yfinance 일봉 조회 장애 내성 강화와 SOXL 일시 조회 실패 fallback 검증을 완료했습니다.
+- 최신 Yahoo adjusted history 변화에 맞춘 canonical guard를 제한적으로 조정했고, V3.2.2 전략·주문 계약은 변경하지 않았습니다.
+- 기준 검증 결과는 CAGR 약 **21.89%**, MDD 약 **-30.94%**, Sharpe 약 **0.987**이며 초기 위험예산 $50,000, HWM75, 최초진입 50→75→100 계약도 통과했습니다.
+- Quality Gate·Security Gate·JDSS V3 Backtest 통과 후 최신 main을 Oracle forced dry-run으로 배포했고 smoke test 성공을 확인했습니다.
 
 ## 현재 안전장치
 
 - `strategy.yaml`의 `portfolio.live_enabled=false`
 - 런타임 live hard lock과 빈 live confirmation
-- 위험증가 BUY는 최신 가격·수량 검토 후 60초 최종 승인
+- 매수는 최신 가격·수량 검토 후 60초 최종 승인
 - 위험축소 SELL은 자동이지만 미완료·UNKNOWN이면 신규 BUY 차단
 - 주문 client ID 멱등성, 브로커 응답 종목·방향·수량 검증, 부분체결 delta 반영
 - 시작·주기 reconciliation 불일치 시 sticky SAFE_MODE
 - 최초진입 50% → 75% → 100%, 단계별 전량 체결 후 최소 3 미국 거래일, 단계 개방은 운영자 확인 필요
 - 배포 workflow는 최신 `main`만 받아 pinned SSH·강제 dry-run·rollback-safe smoke를 검증
 
-## 현재 개발 상태
+## 현재 개발 상태 — Telegram 운영 화면 정리
 
-이번 yfinance/SOXL 긴급 장애 수정 작업은 **종료** 상태입니다. Telegram 운영 화면 개선, 일일 운용보고 통합, 최초진입 로직, yfinance 장애 내성 강화까지 최신 main 및 Oracle forced dry-run에 반영됐습니다. 주문 감시·정합성 점검·안전 경고의 1분 주기와 live 잠금은 유지됩니다.
+- 활성 개발 브랜치: **`feature/telegram-operator-ux`**
+- Draft PR: **#194 `feat: simplify Telegram operator UX and order shortcuts`**
+- 목적: 내부 개발용 표현인 `배분`, `오버레이`, `allocation`, `위험증가 BUY`를 운영자가 바로 이해할 수 있는 `목표비중`, `보유/목표`, `추가매수 판단`, `매수 주문 승인 대기` 중심 표현으로 정리합니다.
+- 대시보드에 `매수 승인 대기 보기`, `미체결 주문 보기` 바로가기 버튼을 추가했습니다.
+- 기존 매수 흐름은 이미 `매수 주문 검토하기` → 최신 가격·수량·현금·세션 재검증 → `종목 N주 모의/실매수 실행`의 2단계 승인과 주문번호·상태·체결수량 회신을 지원함을 확인했습니다.
+- Toss OpenAPI `place_order()` 어댑터도 구현돼 있지만, V3.2.2 실제 live 주문은 애플리케이션 hard lock과 forced dry-run으로 계속 차단합니다. 이 UX PR은 live 잠금을 해제하지 않습니다.
+- `docs/TELEGRAM_BOT_GUIDE.md`와 Telegram 포맷·버튼 테스트를 같은 PR에서 동기화했습니다.
+- 현재 PR은 **아직 main 미병합 / Oracle 미배포** 상태이며 최종 CI 확인 중입니다.
 
 ## live 전환 전에만 남아 있는 항목
 
@@ -52,7 +52,7 @@
 
 ## 바로 다음 작업
 
-1. 다음 미국 시장일에 SOXL을 포함한 일일 분석이 yfinance 일시 장애에도 정상 완료되는지 확인합니다.
-2. 한국시간 오전 7시 일일 운용보고가 정상 도착하는지 확인합니다.
-3. 운영 로그에서 주문 감시·정합성 점검의 1분 주기가 유지되는지 확인합니다.
-4. 별도 live 승인 전까지 live 잠금을 해제하지 않습니다.
+1. PR #194의 Quality Gate·Security Gate·JDSS V3 canonical Backtest를 모두 통과시킵니다.
+2. Telegram 새 버튼과 문구가 관리자 1:1 권한·기존 2단계 승인·stale callback 안전장치를 보존하는지 최종 확인합니다.
+3. 병합 승인 전까지 PR은 Draft로 유지하고 Oracle에는 배포하지 않습니다.
+4. 별도 live 승인 전까지 실제 Toss 주문 잠금을 해제하지 않습니다.
