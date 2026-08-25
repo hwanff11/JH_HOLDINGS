@@ -120,7 +120,10 @@ def render(payload: dict) -> str:
         "- block length: 3 / 6 / 12개월, 각 3,000회, 고정 seed",
         "- 이는 역사적 경로 순서 민감도 검증이며 새로운 독립 OOS 데이터의 대체물은 아님",
         "",
-        "|QLD sleeve|Block|CAGR 승률|MDD 승률|Sharpe 승률|Calmar 승률|4조건 동시|중앙 ΔCAGR|5% ΔCAGR|중앙 MDD개선|",
+        (
+            "|QLD sleeve|Block|CAGR 승률|MDD 승률|Sharpe 승률|Calmar 승률|"
+            "4조건 동시|중앙 ΔCAGR|5% ΔCAGR|중앙 MDD개선|"
+        ),
         "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for weight in WEIGHTS:
