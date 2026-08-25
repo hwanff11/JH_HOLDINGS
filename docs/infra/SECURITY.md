@@ -1,144 +1,270 @@
-# JH_HOLDINGS 보안 기준
+# JH_HOLDINGS 보안·주문 안전 기준
 
-이 문서는 비밀정보, Telegram 관리자 인증, 주문 승인, Toss API, SQLite, GitHub Actions와 Oracle 배포의 **기술적 안전 경계**를 소유합니다. 정확한 현재 전략·자금 수치는 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 배포·live 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 따릅니다.
+이 문서는 **비밀정보, Telegram 관리자 인증, BUY 승인, 주문 멱등성, SQLite 원장, Toss API, GitHub Actions, Oracle 배포와 live 잠금의 기술적 안전 불변식**을 소유합니다.
+
+전략 숫자는 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 배포·live 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 따릅니다.
 
 ## 1. 신뢰 경계
 
-| 경계 | 신뢰하는 정보 | 반드시 검증할 정보 |
+| 경계 | 신뢰 가능한 것 | 항상 다시 검증할 것 |
 |---|---|---|
-| Telegram | 허용된 관리자 Chat ID | private chat, 메시지/콜백 사용자, 단계, 토큰, 만료, stale button |
-| JDSS 애플리케이션 | 검증된 설정과 트랜잭션으로 확정된 내부 상태 | 환경변수, 기존 DB, 외부 시세·주문 응답 |
-| Dry-run broker | 현재 프로세스와 SQLite로 증명한 모의 주문 상태 | 재시작 복원, 부분체결 delta, 열린 주문 |
-| Toss OpenAPI | 공식 HTTPS 고정 호스트 | 인증·HTTP·JSON·필수값·실제 계좌 수량과 주문 상태 |
-| GitHub Actions | 보호된 `main`과 승인된 Environment | 배포 SHA, 요청 주체, Secret, workflow 권한 |
-| Oracle | release와 protected shared 경로 | SSH host key, 환경파일·DB·로그 권한, 서비스·원장 상태 |
+| Telegram | 설정된 관리자 Chat ID | private chat, `from_user`, callback 단계, token, TTL, stale button |
+| JDSS 내부 | 검증된 설정과 커밋된 DB transaction | 환경변수, 기존 DB, 외부 입력 |
+| Dry-run broker | 현재 프로세스·SQLite로 증명되는 모의상태 | 재시작 복원, 부분체결, 열린 주문 |
+| Toss OpenAPI | 고정된 공식 HTTPS endpoint | 인증, HTTP, JSON, 숫자 범위, 실제 계좌·주문 상태 |
+| GitHub Actions | 보호된 main과 승인된 Environment | source SHA, 요청 주체, secret 존재, workflow 권한 |
+| Oracle | 배포된 release 구조 | SSH host key, 환경파일 권한, DB·서비스·원장 상태 |
 
-Dry-run broker와 Toss OpenAPI는 서로 다른 경계입니다. 한쪽의 성공·수량을 다른 쪽의 성공·수량으로 간주하지 않습니다.
+Dry-run broker와 Toss OpenAPI는 서로 다른 경계입니다. 한쪽 성공을 다른 쪽 성공으로 간주하지 않습니다.
 
 ## 2. 공개 저장소와 비밀정보
 
-저장소가 public이어도 코드 자체가 자격증명이 되지 않도록 설계합니다.
+다음을 Git·로그·Markdown·Issue·테스트 fixture에 기록하지 않습니다.
 
-- `.env`, Telegram Bot Token, Toss 앱 키·시크릿, SSH 개인키, 전체 계좌번호, 인증 헤더, GitHub Environment secret을 Git·로그·문서·Issue에 저장하지 않습니다.
-- 공개 Markdown에는 서버 절대경로·OS 사용자명·서비스 실명·backup/snapshot 파일명·host 식별자·일회성 실행 ID를 남기지 않습니다. 정확한 운영 식별자는 보호된 배포 설정과 비공개 운영 기록에서만 관리합니다.
-- `.env.example`에는 키 이름과 안전한 비밀 아닌 기본값만 둡니다.
-- Actions 비밀값은 승인된 Environment Secret으로 관리합니다.
-- 예외·API 원문·주문 응답에 인증정보나 승인 토큰이 노출되지 않게 합니다.
-- Gitleaks는 전체 Git history를 검사하고, 의심 노출이 있으면 live를 잠근 뒤 해당 자격증명을 폐기·재발급합니다.
-- 전략 수식·운영 구조는 public 저장소에서 누구나 볼 수 있음을 전제로 합니다. 영업비밀로 유지해야 하는 내용은 별도 승인 없이 추가 공개하지 않습니다.
+- `.env` 실제 값
+- Telegram Bot Token
+- Toss 앱 key/secret과 인증 header
+- SSH private key
+- 전체 계좌번호
+- approval raw token
+- GitHub Environment secret
 
-## 3. GitHub `main` 보호
+공개 Markdown에는 서버 절대경로·OS 사용자명·서비스 실명·host 식별자·실제 backup/snapshot 파일명·장기 보존할 필요가 없는 일회성 run ID를 적지 않습니다.
 
-`main`은 운영 배포의 출발점이므로 GitHub branch protection/ruleset을 필수로 사용합니다.
+`.env.example`에는 secret 이름과 비밀이 아닌 안전한 기본값만 둡니다.
 
-- PR 없이 직접 변경 금지
+의심 노출이 있으면 live를 잠그고 자격증명을 폐기·재발급한 뒤 history까지 Gitleaks로 확인합니다.
+
+## 3. `main` 변경 통제
+
+- PR 없는 기능 변경 금지
 - force push 금지
-- branch delete 금지
-- 필수 CI: `Quality Gate`, `Security`
-- 전략 성과·실행 경로를 바꾸는 PR은 canonical `Backtest` 검증도 확인
-- 가능하면 conversation resolution과 최신 base 반영을 요구
-- Actions 기본 권한은 `contents: read`이며 필요한 workflow만 최소 권한 추가
+- branch delete 보호
+- 안정적인 필수 check 이름 유지
+- Quality Gate와 Security Gate 필수
+- 전략·백테스트 민감 변경은 canonical Backtest 확인
+- Actions 기본 권한은 `contents: read`, 필요한 workflow만 최소 추가 권한
+- 문서-only 변경은 안전한 fast path를 사용하고 runtime을 불필요하게 재배포하지 않음
 
-보호 설정이 꺼져 있으면 코드가 정상이어도 production 변경통제는 미완료로 봅니다.
+branch protection이 비활성화되면 코드가 정상이어도 production 변경통제는 미완료로 봅니다.
 
-## 4. Telegram 인증·승인·최초진입
+## 4. Telegram 관리자 인증
 
-- 정확히 1개의 관리자 Chat ID만 허용합니다.
-- 명령과 callback 모두 `private` chat인지, `chat.id`와 실제 `from_user.id`가 관리자와 같은지 확인합니다.
-- 위험증가 BUY는 가격·수량 검토와 최종 실행의 2단계 승인을 모두 요구합니다.
-- 승인 토큰은 암호학적 난수로 만들고 DB에는 SHA-256 hash만 저장하며 상수시간 비교, 단계, 만료, 1회사용을 검증합니다.
-- 가격·수량·세션이 바뀌면 이전 토큰으로 주문하지 않고 재검토합니다.
-- 최초진입 단계 버튼은 callback에 생성 당시 단계번호를 포함하고, 현재 DB 단계와 다르면 stale button으로 거부합니다.
-- 50→75→100 다음 단계는 현재 단계 전량 체결과 최소 대기 거래일을 다시 확인합니다.
+- 정확히 1개의 관리자 Chat ID를 허용
+- private chat만 허용
+- `chat.id`와 `from_user.id`가 관리자와 일치하는지 명령·callback 모두 검사
+- callback payload는 신뢰하지 않고 DB의 현재 상태와 대조
+- stale onboarding 단계·만료 approval·이미 사용된 token은 거부
+- 사용자 메시지에 secret·approval token을 노출하지 않음
 
-## 5. 전략자금 경계
+## 5. 위험증가 BUY 승인 불변식
 
-- 초기 위험원금, HWM 이익 재투자율과 공식은 설정·사양을 직접 읽습니다.
-- 위험예산은 현재 평가액보다 클 수 없고 JDSS 손실을 개인 현금으로 자동 보충하지 않습니다.
-- 기존 allocation 원가와 미체결 BUY의 잔여 지정가·예상수수료를 위험예산에서 예약합니다.
-- 열린 코어 BUY와 아직 원장에 반영되지 않은 체결수량도 종목 잔여 목표에서 예약합니다.
-- 목표 변경 전에 기존 allocation BUY·SELL 상태를 최신화하고 취소·정산합니다.
-- 신규 BUY는 위험예산, JDSS 원장상 현금, 브로커 주문가능금액과 종목 잔여 목표 중 가장 제한적인 경계를 넘지 않습니다.
-- 같은 Toss 계좌의 개인 QQQ/TQQQ/SOXL을 JDSS 수량과 혼합하지 않습니다.
+BUY는 사람 승인 없는 자동 실행으로 확대하지 않습니다.
 
-BUY 주문예약은 SQLite `BEGIN IMMEDIATE` 트랜잭션 안에서 현금과 목표수량을 함께 다시 검사해 동시 승인으로 한도를 이중 사용하지 못하게 합니다.
+기본 사용자 경로는:
 
-## 6. 주문·정합성 안전장치
+```text
+오늘 주문 한번에 검토
+  → preflight
+  → N건 순차 실행 최종 승인
+```
 
-- 모든 주문은 결정적 client order ID와 DB 예약으로 멱등성을 확보합니다.
-- 브로커 경계에서 종목, 주문방향, 주문유형, 양수수량, 유한·양수 가격을 검증합니다.
-- 브로커 receipt의 client order ID, broker order ID, 종목, 방향, 주문수량, 체결수량을 예약값과 대조합니다.
-- 동일 주문 재시도는 브로커 최신 receipt를 먼저 저장하고 새 체결 delta만 원장에 반영합니다.
-- DB/브로커 보유수량 또는 열린 주문 불일치는 SAFE_MODE로 전환합니다.
-- 주문응답 유실은 성공으로 추정하거나 재주문하지 않고 `UNKNOWN`으로 유지합니다.
-- 누적 부분체결은 이전 적용값과 신규 누적값의 delta만 반영하고 누적 체결수량 감소를 거부합니다.
-- 위험축소 SELL은 종료·원장 반영·정합성 확인이 끝나기 전 신규 BUY를 허용하지 않습니다.
-- SAFE_MODE는 정상 조회 한 번으로 자동 해제하지 않습니다.
+내부적으로는 각 signal의 review/execution approval 경계를 유지합니다.
 
-## 7. 시작·재시작 안전성
+- token은 암호학적 난수
+- DB에는 SHA-256 hash만 저장
+- 상수시간 비교
+- approval stage 확인
+- 짧은 TTL
+- 1회사용
+- 가격·수량·세션 변경 시 기존 approval 폐기
 
-- 서비스 시작 시 DB 전략 세대·schema와 현재 설정의 호환성을 확인합니다.
-- dry-run 보유수량과 현금은 증명 가능한 체결·수수료로 복원합니다.
-- 체결 0으로 증명되는 DRY 미체결 주문만 cold restart에서 복원합니다.
-- `UNKNOWN`과 재시작 시점 `PARTIAL_FILLED`를 메모리 상태로 추정 복구하지 않습니다.
-- DRY broker order sequence는 완료 주문을 포함한 역사상 최대번호 다음부터 이어갑니다.
-- 시작 시 아직 allocation 원장에 반영되지 않은 확정 체결은 누적 delta만 한 번 반영합니다.
-- 열린 주문의 broker ID가 없거나 현재 브로커에서 찾지 못하면 SAFE_MODE 이벤트를 남깁니다.
+## 6. 일괄 BUY preflight 안전장치
 
-## 8. live 잠금
+batch approval을 만들기 전에 다음을 모두 증명해야 합니다.
 
-- 정확한 현재 상태는 `CURRENT_WORK.md`를 확인합니다.
-- `portfolio.live_enabled=false`, 애플리케이션 live hard lock, Oracle forced dry-run, 빈 live confirmation을 함께 유지합니다.
-- live 전환은 백테스트·dry-run·실제 Toss 주문 경계·최초 계좌 적용 preflight와 별도 명시적 승인 없이는 하지 않습니다.
-- read-only smoke 성공, 문서 체크리스트 추가, 서비스 active만으로 live 준비 완료라고 판단하지 않습니다.
+1. 주문 허용 세션
+2. Toss 08:50~08:59 KST 점검시간이 아님
+3. 최신 완결 거래일의 production 계산 freshness
+4. 새 목표의 다음 거래일·target_qty 준비 상태
+5. 열린 위험축소 SELL 없음
+6. 중복 BUY 미체결 없음
+7. 즉시 reconciliation 성공
+8. SAFE_MODE 없음
+9. signal generation/version 유효
+10. **전체 BUY 합계**가 HWM75·JDSS 현금·브로커 주문가능금액을 넘지 않음
 
-## 9. Toss API·네트워크
+active BUY signal이 없다는 이유만으로 `오늘 주문 없음`을 만들지 않습니다. target_qty와 보유수량을 대조해 계산지연·SELL 준비·BUY 생성대기·onboarding 단계대기와 진짜 주문없음을 구분합니다.
 
-- Toss API 호스트는 공식 HTTPS 기본 URL로 고정합니다.
-- 연결·응답 timeout을 적용하고 401 token refresh는 제한된 횟수만 재시도합니다.
-- 성공 응답도 JSON 객체, 필수값, 숫자 범위와 주문 상태를 검증합니다.
-- API 오류 문자열을 셸 명령으로 사용하지 않습니다.
-- 유지보수 시간과 일시적 장애를 주문 성공 또는 미보유 상태로 바꾸지 않습니다.
+## 7. batch 동시성·중복방지
 
-## 10. SSH·Oracle
+- batch 생성부터 실행까지 process-level lock으로 직렬화
+- 이미 유효한 batch가 있으면 새 batch 생성 금지
+- batch가 생성되는 동안 일부 execution approval만 만들어지고 오류가 나면 모두 cleanup
+- 오래된 batch ID와 callback 재사용 금지
+- 서버 재시작 뒤 메모리 batch를 복원해 주문권한으로 사용하지 않음
+- DB 주문예약은 SQLite `BEGIN IMMEDIATE` 안에서 현금·위험예산·잔여 목표를 다시 검사
 
-- GitHub Actions와 로컬 배포 모두 `StrictHostKeyChecking=yes`를 사용합니다.
-- Oracle host public key는 Oracle 콘솔 또는 기존 신뢰 경로로 확인한 뒤 known_hosts에 고정합니다.
-- Actions 중 `ssh-keyscan` 결과를 즉석 신뢰하거나 `accept-new`로 우회하지 않습니다.
-- Actions는 `ORACLE_SSH_KNOWN_HOSTS`가 없으면 배포·runtime verifier를 중단합니다.
-- Oracle 서비스는 비루트 사용자, `NoNewPrivileges`, 빈 capability, private devices/tmp와 커널·control group 보호를 유지합니다.
-- DB·로그·캐시는 `shared`만 쓰기 가능하게 하고 systemd `UMask=0077`을 유지합니다.
+process lock은 사용자 편의용 1차 방어이고, **최종 안전경계는 DB transaction과 broker/order validation**입니다.
 
-## 11. 배포·DB rollback
+## 8. 최종 실행 직전 재검증
 
-- 배포 대상은 원격과 일치하는 최신 `main`으로 제한합니다.
-- 새 release는 release 내부 `.venv`에서 미리 설치·검증하고 기존 서비스는 그동안 계속 실행합니다.
-- 서비스를 멈춘 직후 SQLite `backup()` API로 일관된 DB snapshot을 만듭니다.
-- `current` symlink와 systemd unit을 새 release로 바꾼 뒤 config/init-db/service/read-only smoke를 검증합니다.
-- stop 이후 실패하면 직전 current, systemd unit, DB snapshot을 자동 복원하고 직전 서비스를 다시 시작합니다.
-- 표준 deploy는 config version 변경을 수행하지 않습니다. 버전 변경은 별도 migration plan·호환성 테스트·백업을 요구합니다.
-- 실제 거래원장을 자동 삭제하지 않습니다.
+최종 버튼 직전에 다시 확인합니다.
 
-## 12. Security workflow
+- broker/DB reconciliation
+- SAFE_MODE
+- 새 열린 주문
+- 전체 매수가능한도
+- 각 종목 가격·수량·세션
+- execution approval 유효성
 
-- `pip-audit`로 Python dependency 취약점을 검사합니다.
-- `bandit`으로 Python 코드의 일반 보안 패턴을 검사합니다.
-- CodeQL 결과는 GitHub Code Scanning에 업로드합니다.
-- Gitleaks는 `fetch-depth: 0`으로 전체 Git history를 검사합니다.
-- Dependabot은 Python과 GitHub Actions 의존성을 주기적으로 확인합니다.
-- CI는 coverage를 측정할 뿐 아니라 최소 하한을 적용해 안전경계 테스트가 조용히 사라지는 것을 방지합니다.
+검토와 실행 사이의 상태 차이를 자동으로 무시하지 않습니다.
 
-## 13. 변경 전 체크리스트
+## 9. 순차 제출과 부분실행
 
-- [ ] 새로운 비밀값을 저장·출력하지 않는가
-- [ ] public 저장소에 불필요한 비밀 운영정보를 추가하지 않는가
-- [ ] `main` 보호와 필수 CI가 유지되는가
-- [ ] Telegram private/admin 검사와 stale callback 차단이 유지되는가
-- [ ] live 잠금과 반자동 BUY 2단계 승인이 유지되는가
-- [ ] 위험축소 SELL 실패·부분체결·UNKNOWN 뒤 신규 BUY가 차단되는가
-- [ ] 현재 원가 + 열린 BUY + 신규 BUY가 위험예산과 목표수량을 넘지 않는가
-- [ ] dry-run 모의원장과 실제 Toss read-only 조회를 명확히 구분하는가
-- [ ] 주문 멱등성·부분체결 delta·reconciliation·SAFE_MODE가 유지되는가
-- [ ] SSH host key가 검증된 known_hosts에 고정돼 있는가
-- [ ] 배포 전 DB snapshot과 자동 rollback이 가능한가
-- [ ] config version 변경을 표준 deploy가 임의로 처리하지 않는가
+일괄 BUY는 원자적 basket 주문이 아닙니다.
+
+- 각 종목은 독립 주문으로 제출
+- 앞 주문이 성공하고 뒤 주문이 실패할 수 있음
+- 가격변경, `UNKNOWN`, `REJECTED`, `CANCELED`, `REPLACED` 등 fail-closed 조건이 나오면 이후 BUY 중단
+- 남은 approval 취소
+- 이미 제출된 앞 주문을 자동 반대매매해 rollback하지 않음
+- 앞 주문은 실제 broker 상태로 계속 감시
+
+사용자 화면에서도 `전체 실행`보다 **`N건 순차 실행`** 표현을 사용해 원자적 주문으로 오해하지 않게 합니다.
+
+## 10. 전략 자금 경계
+
+- HWM 위험예산은 현재 평가액보다 클 수 없음
+- 손실을 개인 현금으로 자동 보충하지 않음
+- 기존 allocation 원가와 열린 BUY 잔여 notional·수수료를 위험예산에서 예약
+- 아직 원장에 반영되지 않은 확정 체결도 잔여 목표 계산에 반영
+- 신규 BUY는 HWM75 위험예산, JDSS 현금, 브로커 주문가능금액, 종목 잔여 target 중 가장 제한적인 경계를 넘지 않음
+- batch 사전검사와 별개로 **각 실제 주문예약에서 다시 원자적으로 검사**
+
+## 11. SELL-first 안전장치
+
+위험축소 SELL은 BUY보다 먼저 처리합니다.
+
+- 목표 변경 전 기존 allocation 주문 상태 최신화
+- 필요한 SELL 제출
+- 종료 확인
+- 체결 원장 반영
+- reconciliation
+- 이후에만 BUY 허용
+
+SELL 부분체결·`UNKNOWN`·취소확인 실패·불완전 정산이 있으면 신규 BUY를 차단합니다.
+
+## 12. 주문 멱등성과 broker receipt 검증
+
+- 결정적 client order ID 사용
+- 동일 client order ID 재시도는 새 주문을 임의 생성하지 않음
+- broker 최신 receipt를 DB에 먼저 저장
+- client order ID, broker order ID, symbol, side, ordered qty, filled qty를 예약값과 대조
+- 불일치 receipt는 `UNKNOWN`
+- 누적 filled qty 감소 거부
+- 종료 주문의 비종료 상태 복귀 거부
+- 누적 체결수량과 누적 체결금액은 이전 적용값과의 delta만 원장 반영
+- `PENDING_CANCEL`, `PENDING_REPLACE` 포함 비종료 상태는 열린 주문으로 예약·감시
+
+## 13. 재시작 안전성
+
+- 시작 시 DB strategy generation·schema와 설정 호환성 확인
+- 증명 가능한 dry-run 체결·수수료로만 수량·현금 복원
+- 재시작 시 `UNKNOWN`과 `PARTIAL_FILLED`를 추정 성공처리하지 않음
+- broker order ID가 없거나 열린 주문을 현재 broker에서 찾을 수 없으면 SAFE_MODE
+- 같은 generation의 저장 target_qty와 현재 보유·열린 주문 차이만 BUY gap 복구 후보로 사용
+
+## 14. SAFE_MODE
+
+대표 진입 조건:
+
+- 주문 결과 `UNKNOWN`
+- broker/DB 보유 불일치
+- 열린 주문 불일치
+- 위험축소 SELL 미완료
+- 복구 상태를 증명할 수 없음
+- 전략 generation/version 불일치
+
+SAFE_MODE는 단 한 번의 정상 조회만으로 자동 해제하지 않습니다.
+
+## 15. 실제 Toss와 dry-run 분리
+
+- forced dry-run 주문·보유·미체결은 SQLite + 모의 broker 기준
+- `/account`와 `toss-smoke`는 실제 Toss를 read-only 조회
+- Toss read-only 결과를 dry-run 보유에 자동 채택하지 않음
+- dry-run 주문을 실주문으로 자동 변환하지 않음
+- 실제 계좌 조회 실패를 0주·정상으로 해석하지 않음
+
+같은 Toss 계좌에서 개인 QQQ/TQQQ/SOXL을 JDSS 관리물량과 혼합하지 않습니다. JDSS 주문과 Toss 앱의 동일티커 수동 주문도 동시에 수행하지 않는 것을 운영 원칙으로 합니다.
+
+## 16. Toss API·네트워크
+
+- 공식 HTTPS base URL 고정
+- 연결·응답 timeout
+- 401 token refresh 재시도 횟수 제한
+- 성공 응답도 JSON 구조·필수값·수치 범위·주문 상태 검증
+- API 오류문자열을 shell 명령으로 사용하지 않음
+- 유지보수·장애를 주문성공 또는 미보유로 변환하지 않음
+
+## 17. SSH·Oracle
+
+- `StrictHostKeyChecking=yes`
+- 신뢰된 경로로 확인한 Oracle public host key만 `known_hosts`에 고정
+- Actions에서 즉석 `ssh-keyscan` 결과를 자동 신뢰하지 않음
+- `accept-new` 사용 금지
+- host trust secret이 없으면 배포·runtime verifier 중단
+- 서비스는 최소권한·비루트·private tmp/device·`UMask=0077` 등 hardening 유지
+- DB·로그·cache만 승인된 shared write 경계 사용
+
+## 18. rollback-safe 배포
+
+- 최신 보호 `main`만 배포
+- release-local venv에서 미리 설치·검증
+- 서비스 정지 직후 SQLite `backup()` snapshot
+- release atomic switch
+- config/init-db/service/read-only smoke
+- 실패 시 previous release + unit + DB snapshot 자동 복원
+- rollback도 실패하면 신규 BUY 금지 및 수동 복구
+- config version 변경은 표준 deploy로 임의 처리하지 않고 별도 migration PR 필요
+
+## 19. Security workflow
+
+- `pip-audit`: Python dependency 취약점
+- `bandit`: Python 일반 보안 패턴
+- CodeQL: code scanning
+- Gitleaks: 전체 Git history secret scan
+- Dependabot: Python·Actions 의존성 갱신
+- coverage 하한: 안전경계 테스트가 조용히 사라지는 것 방지
+
+## 20. live hard lock
+
+현재 정확한 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
+
+live OFF 계약에서는 다음을 함께 유지합니다.
+
+- `portfolio.live_enabled=false`
+- application live hard lock
+- Oracle forced dry-run
+- 빈 live confirmation
+
+배포 성공, read-only smoke 성공, 문서 체크리스트 존재만으로 live 준비 완료라고 판단하지 않습니다.
+
+live 전환은 실제 계좌 preflight·주문 어댑터·회계·migration·복구 리허설과 별도 명시 승인을 요구합니다.
+
+## 21. 변경 전 체크리스트
+
+- [ ] secret이나 계좌정보를 새로 노출하지 않는가
+- [ ] 관리자 private/chat/from_user 검증이 유지되는가
+- [ ] BUY approval TTL·1회성·stale 차단이 유지되는가
+- [ ] batch preflight가 계산 freshness·SELL·정합성·합계한도를 확인하는가
+- [ ] 동시 클릭·중복 batch가 차단되는가
+- [ ] 최종 클릭 직전 reconciliation과 한도 재검사가 있는가
+- [ ] 순차 제출 중 실패 시 이후 BUY가 중단되는가
+- [ ] 위험축소 SELL 미완료 뒤 BUY가 차단되는가
+- [ ] 주문 멱등성·부분체결 delta·receipt 검증이 유지되는가
+- [ ] dry-run과 Toss read-only가 분리되는가
+- [ ] SAFE_MODE를 쉽게 우회하지 않는가
+- [ ] SSH host key가 고정되어 있는가
+- [ ] DB snapshot과 rollback이 가능한가
+- [ ] live hard lock을 사용자 명시 승인 없이 약화하지 않는가
