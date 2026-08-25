@@ -5,6 +5,7 @@ on:
     paths:
       - "scripts/research_qld_sso_alpha.py"
       - "scripts/research_qld_sso_alpha_phase2.py"
+      - "scripts/research_qld_sso_alpha_phase3.py"
       - ".github/workflows/qld-sso-alpha-research.yml"
       - "src/**"
       - "configs/**"
@@ -25,7 +26,8 @@ jobs:
       - name: Ruff
         run: |
           ruff check scripts/research_qld_sso_alpha.py \
-            scripts/research_qld_sso_alpha_phase2.py
+            scripts/research_qld_sso_alpha_phase2.py \
+            scripts/research_qld_sso_alpha_phase3.py
       - name: Run Phase 1 sweep
         run: |
           python scripts/research_qld_sso_alpha.py \
@@ -36,6 +38,11 @@ jobs:
           python scripts/research_qld_sso_alpha_phase2.py \
             --output-json reports/qld-sso-alpha-phase2.json \
             --output-md reports/qld-sso-alpha-phase2.md
+      - name: Run Phase 3 selective SSO sweep
+        run: |
+          python scripts/research_qld_sso_alpha_phase3.py \
+            --output-json reports/qld-sso-alpha-phase3.json \
+            --output-md reports/qld-sso-alpha-phase3.md
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
@@ -45,3 +52,5 @@ jobs:
             reports/qld-sso-alpha.md
             reports/qld-sso-alpha-phase2.json
             reports/qld-sso-alpha-phase2.md
+            reports/qld-sso-alpha-phase3.json
+            reports/qld-sso-alpha-phase3.md
