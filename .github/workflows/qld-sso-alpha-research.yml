@@ -1,0 +1,37 @@
+name: QLD SSO Alpha Research
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_qld_sso_alpha.py"
+      - ".github/workflows/qld-sso-alpha-research.yml"
+      - "src/**"
+      - "configs/**"
+  workflow_dispatch:
+
+jobs:
+  qld-sso-alpha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check scripts/research_qld_sso_alpha.py
+      - name: Run research sweep
+        run: |
+          python scripts/research_qld_sso_alpha.py \
+            --output-json reports/qld-sso-alpha.json \
+            --output-md reports/qld-sso-alpha.md
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: qld-sso-alpha-research
+          path: |
+            reports/qld-sso-alpha.json
+            reports/qld-sso-alpha.md
