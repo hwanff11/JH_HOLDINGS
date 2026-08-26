@@ -65,9 +65,8 @@ class LiveCommissioningPreflight:
             else:
                 required = Decimal(str(self.repository.config.total_strategy_capital))
                 if normalized < required:
-                    issues.append(
-                        f"LIVE_BUYING_POWER_BELOW_CAPITAL:{normalized}<{required}"
-                    )
+                    # Do not put a private account balance into public Actions logs.
+                    issues.append("LIVE_BUYING_POWER_BELOW_CAPITAL")
 
         unique = tuple(dict.fromkeys(issues))
         if unique:
