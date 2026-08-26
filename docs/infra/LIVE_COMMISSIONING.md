@@ -98,6 +98,13 @@ live 잠금 해제 PR에서는 다음 항목을 별도 시험 대상으로 둔�
 - timeout/429/5xx 시 자동 재주문 금지
 - `UNKNOWN` 발생 시 BUY HALT 또는 SAFE_MODE 유지
 
+토스 공식 주문 계약상 `clientOrderId`를 전달하면 서버는 그 값을 그대로 반환하며, 이 값은 10분간 멱등성 키로 사용된다. JDSS는 모든 주문에 `clientOrderId`를 전달하므로 다음을 강제한다.
+
+- 주문 생성 200 응답에서 `clientOrderId`가 누락되거나 요청값과 다르면 성공으로 확정하지 않는다.
+- 누락된 응답 식별자를 로컬 요청값으로 임의 보충하지 않는다.
+- 식별자를 증명할 수 없는 주문은 `UNKNOWN`으로 남기고 broker 주문내역·보유수량을 조회한 뒤 reconciliation한다.
+- 10분 멱등성 유효시간을 지난 뒤 동일 `clientOrderId`를 broker에 맹목적으로 재전송하지 않는다. 장기 중복 방지는 live DB의 주문 원장과 broker reconciliation을 기준으로 한다.
+
 실계좌 canary 주문을 사용할 경우 **자동으로 실행하지 않는다.** 주문 종목·수량·가격·취소 계획을 운영자가 별도 승인한 경우에만 수행한다.
 
 ## 6. Operator BUY Halt

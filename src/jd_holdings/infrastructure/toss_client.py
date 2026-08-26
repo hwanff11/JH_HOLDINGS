@@ -296,7 +296,7 @@ class TossClient:
         response = self._request("POST", "/api/v1/orders", require_account=True, json=payload)
         result = response.get("result", {})
         return OrderReceipt(
-            client_order_id=str(result.get("clientOrderId") or request.client_order_id),
+            client_order_id=str(result.get("clientOrderId") or ""),
             broker_order_id=str(result["orderId"]),
             status="SUBMITTED",
             quantity=request.quantity,
