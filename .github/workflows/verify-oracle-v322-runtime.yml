@@ -49,7 +49,10 @@ jobs:
           grep -q 'jdss_overlay_weight: 0.05' strategy.yaml
           grep -q 'daily_analysis_time_kst: "07:00"' strategy.yaml
           grep -A3 '^idle_cash:' strategy.yaml | grep -q 'enabled: false'
+          # The default/legacy path remains locked. Live is routed through the
+          # separately commissioned runtime selector and isolated live ledger.
           grep -q 'live_enabled: false' strategy.yaml
+          grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -69,6 +72,8 @@ jobs:
             tests/test_operational_faults.py \
             tests/test_runtime_resilience.py \
             tests/test_v322_dry_run.py \
+            tests/test_live_commissioning.py \
+            tests/test_live_runtime_safety.py \
             tests/test_initial_onboarding.py \
             tests/test_initial_onboarding_telegram.py
 
@@ -89,7 +94,24 @@ jobs:
           # The strict SSH connection below is the authoritative parser and
           # pinned hostname/key matcher, including hashed known_hosts entries.
 
-      - name: Verify deployed SHA and forced dry-run
+      - name: Detect Oracle runtime mode
+        id: runtime
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+        run: |
+          set -Eeuo pipefail
+          mode="$(ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" "$SERVER_USER@$SERVER_HOST" \
+            "awk -F= '\$1 == \"JDSS_TRADING_MODE\" {print \$2; exit}' '$SERVER_TARGET_DIR/shared/.env'")"
+          mode="$(printf '%s' "$mode" | tr -d '\r\n')"
+          case "$mode" in dry_run|live) ;; *) echo "Unexpected runtime mode" >&2; exit 1 ;; esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployed SHA and runtime contract
         env:
           SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
           SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
@@ -97,11 +119,12 @@ jobs:
           SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
           SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
           EXPECTED_SHA: ${{ github.event_name == 'schedule' && '' || steps.ref.outputs.ref }}
+          EXPECTED_MODE: ${{ steps.runtime.outputs.mode }}
         run: |
           set -Eeuo pipefail
           ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" "$SERVER_USER@$SERVER_HOST" \
-            "TARGET_DIR='$SERVER_TARGET_DIR' EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE'
+            "TARGET_DIR='$SERVER_TARGET_DIR' EXPECTED_SHA='$EXPECTED_SHA' EXPECTED_MODE='$EXPECTED_MODE' bash -s" <<'REMOTE'
           set -Eeuo pipefail
           current="$(readlink -f "$TARGET_DIR/current")"
           env_file="$TARGET_DIR/shared/.env"
@@ -119,13 +142,36 @@ jobs:
           grep -q 'rs_lookback: 126' "$current/strategy.yaml"
           grep -q 'daily_analysis_time_kst: "07:00"' "$current/strategy.yaml"
           grep -q 'live_enabled: false' "$current/strategy.yaml"
-          grep -q '^JDSS_TRADING_MODE=dry_run$' "$env_file"
-          grep -q '^JDSS_LIVE_CONFIRMATION=$' "$env_file"
           sudo systemctl is-active --quiet jh_holdings_bot
-          cd "$current"
+
           set -a
           source "$env_file"
           set +a
+          test "${JDSS_TRADING_MODE:-}" = "$EXPECTED_MODE"
+          if [[ "$EXPECTED_MODE" == "dry_run" ]]; then
+            test -z "${JDSS_LIVE_CONFIRMATION:-}"
+            db_path="$TARGET_DIR/shared/data/jdss.db"
+          else
+            test "${JDSS_LIVE_CONFIRMATION:-}" = "ENABLE_JDSS_LIVE_ORDERS"
+            test "${JDSS_DB_PATH:-}" = "$TARGET_DIR/shared/data/jdss-live.db"
+            db_path="$JDSS_DB_PATH"
+            "$current/.venv/bin/python" - "$db_path" <<'PY'
+          import sqlite3
+          import sys
+          connection = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+          try:
+              values = dict(connection.execute(
+                  "SELECT key, value FROM system_state "
+                  "WHERE key IN ('live_commissioned','operator_buy_halt')"
+              ).fetchall())
+          finally:
+              connection.close()
+          assert values.get("live_commissioned") == "1", values
+          assert values.get("operator_buy_halt") in {"0", "1"}, values
+          print(f"LIVE_RUNTIME_MARKER=PASS BUY_HALT={values.get('operator_buy_halt')}")
+          PY
+          fi
+          test -f "$db_path"
           "$current/.venv/bin/jdss" --config "$current/strategy.yaml" validate-config
           "$current/.venv/bin/jdss" --config "$current/strategy.yaml" toss-smoke
           REMOTE
@@ -138,23 +184,26 @@ jobs:
           SERVER_HOST: ${{ secrets.ORACLE_HOST }}
           SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
           SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+          RUNTIME_MODE: ${{ steps.runtime.outputs.mode }}
         run: |
           set -Eeuo pipefail
           ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" "$SERVER_USER@$SERVER_HOST" \
-            "TARGET_DIR='$SERVER_TARGET_DIR' bash -s" <<'REMOTE'
+            "TARGET_DIR='$SERVER_TARGET_DIR' RUNTIME_MODE='$RUNTIME_MODE' bash -s" <<'REMOTE'
           set -Eeuo pipefail
           current="$(readlink -f "$TARGET_DIR/current")"
           env_file="$TARGET_DIR/shared/.env"
           set -a
           source "$env_file"
           set +a
-          "$current/.venv/bin/python" - <<'PY'
+          "$current/.venv/bin/python" - "$RUNTIME_MODE" <<'PY'
           import json
           import os
+          import sys
           import urllib.parse
           import urllib.request
 
+          mode = sys.argv[1]
           token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
           chat_ids = [
               item.strip()
@@ -184,7 +233,7 @@ jobs:
               "sendMessage",
               {
                   "chat_id": chat_ids[0],
-                  "text": "✅ JH_HOLDINGS forced dry-run Telegram runtime smoke",
+                  "text": f"✅ JH_HOLDINGS {mode} Telegram runtime smoke",
                   "disable_notification": "true",
               },
           )
@@ -202,6 +251,7 @@ jobs:
           REMOTE
 
       - name: Check whether restart verification is safe now
+        if: steps.runtime.outputs.mode == 'dry_run'
         id: market
         env:
           SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
@@ -235,7 +285,7 @@ jobs:
           echo "phase=$phase" >> "$GITHUB_OUTPUT"
 
       - name: Restart only during closed market and verify recovery
-        if: steps.market.outputs.phase == 'closed'
+        if: steps.runtime.outputs.mode == 'dry_run' && steps.market.outputs.phase == 'closed'
         env:
           SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
           SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
@@ -263,7 +313,12 @@ jobs:
       - name: Record verifier outcome
         run: |
           set -Eeuo pipefail
-          if [[ "${{ steps.market.outputs.phase }}" == "closed" ]]; then
+          mode='${{ steps.runtime.outputs.mode }}'
+          phase='${{ steps.market.outputs.phase }}'
+          if [[ "$mode" == "live" ]]; then
+            echo 'ORACLE_V322_RUNTIME_VERIFY=PASS_LIVE_NO_RESTART' >> "$GITHUB_STEP_SUMMARY"
+            echo 'LIVE 런타임은 검증기가 자동 재시작하지 않습니다. 재시작 시 BUY HALT가 자동 재설정되므로 운영자 의도 없는 상태변화를 방지합니다.' >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$phase" == "closed" ]]; then
             echo 'ORACLE_V322_RUNTIME_VERIFY=PASS_RESTARTED' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'ORACLE_V322_RUNTIME_VERIFY=PASS_NO_RESTART' >> "$GITHUB_STEP_SUMMARY"
@@ -274,15 +329,17 @@ jobs:
         if: always() && github.event_name == 'issues'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           JOB_STATUS: ${{ job.status }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PHASE: ${{ steps.market.outputs.phase }}
+          RUNTIME_MODE: ${{ steps.runtime.outputs.mode }}
         run: |
           set -Eeuo pipefail
           if [[ "$JOB_STATUS" == "success" ]]; then
-            body="✅ V3.2.2 Oracle runtime 검증 성공. 시장 phase=\`${PHASE:-unknown}\`.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
+            body="✅ V3.2.2 Oracle runtime 검증 성공. mode=\`${RUNTIME_MODE:-unknown}\`, phase=\`${PHASE:-not-applicable}\`.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
           else
             body="❌ V3.2.2 Oracle runtime 검증 실패.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
           fi
