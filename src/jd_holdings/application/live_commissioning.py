@@ -4,15 +4,27 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
+
 from .account_preflight import RealAccountPreflight
 from .database import SQLiteRepository
 from .operational_safety import OPERATOR_BUY_HALT_KEY
+from .reconciliation import ReconciliationService
 
 
 @dataclass(frozen=True)
 class LiveCommissioningResult:
     issues: tuple[str, ...]
     buying_power: Decimal | None
+
+    @property
+    def safe(self) -> bool:
+        return not self.issues
+
+
+@dataclass(frozen=True)
+class LiveReleaseGateResult:
+    issues: tuple[str, ...]
 
     @property
     def safe(self) -> bool:
@@ -102,3 +114,87 @@ class LiveCommissioningPreflight:
                 issues.append(f"LIVE_DB_ACTIVE_CORE_POSITIONS:{len(core_rows)}")
 
         return tuple(issues)
+
+
+class LiveReleaseGate:
+    """Order-write-free gate for a routine live release switch or restart.
+
+    Unlike first commissioning, an established live ledger may legitimately contain
+    managed positions. A routine release is safe to switch only while new BUY risk is
+    halted, there are no outstanding orders/approvals, and the broker state reconciles
+    with the persisted ledger. This class never enables live trading or submits/cancels
+    an order. Reconciliation may persist SAFE_MODE/heartbeat state when it detects a
+    mismatch, which is intentionally risk-reducing.
+    """
+
+    def __init__(self, repository: SQLiteRepository, broker: Any) -> None:
+        self.repository = repository
+        self.broker = broker
+
+    def run(self) -> LiveReleaseGateResult:
+        issues: list[str] = []
+
+        if self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) != "1":
+            issues.append("LIVE_RELEASE_BUY_HALT_NOT_ARMED")
+
+        local_open_orders = self.repository.open_orders()
+        if local_open_orders:
+            issues.append(f"LIVE_RELEASE_LOCAL_OPEN_ORDERS:{len(local_open_orders)}")
+
+        with self.repository.transaction() as connection:
+            active_approvals = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM approvals WHERE status = 'ACTIVE'"
+                ).fetchone()[0]
+            )
+        if active_approvals:
+            issues.append(f"LIVE_RELEASE_ACTIVE_APPROVALS:{active_approvals}")
+
+        managed_symbols = list(ALLOCATION_SYMBOLS)
+        if self.repository.config.idle_cash.enabled:
+            managed_symbols.append(self.repository.config.idle_cash.symbol)
+        for symbol in dict.fromkeys(managed_symbols):
+            try:
+                broker_open_orders = self.broker.list_orders(
+                    status="OPEN", symbol=symbol, limit=100
+                )
+            except Exception as exc:
+                issues.append(
+                    f"LIVE_RELEASE_BROKER_OPEN_ORDER_LOOKUP_FAILED:{symbol}:{type(exc).__name__}"
+                )
+            else:
+                if broker_open_orders:
+                    issues.append(
+                        f"LIVE_RELEASE_BROKER_OPEN_ORDERS:{symbol}:{len(broker_open_orders)}"
+                    )
+
+        try:
+            mismatches = ReconciliationService(
+                self.repository.config,
+                self.repository,
+                self.broker,
+            ).run()
+        except Exception as exc:
+            issues.append(f"LIVE_RELEASE_RECONCILIATION_ERROR:{type(exc).__name__}")
+        else:
+            for symbol, symbol_issues in sorted(mismatches.items()):
+                issues.append(
+                    f"LIVE_RELEASE_RECONCILIATION_FAILED:{symbol}:{'|'.join(symbol_issues)}"
+                )
+
+        unique = tuple(dict.fromkeys(issues))
+        if unique:
+            self.repository.log_event(
+                "SAFE_MODE",
+                "LIVE_RELEASE_GATE_FAILED",
+                ";".join(unique),
+                context={"database": self.repository.db_path.name},
+            )
+        else:
+            self.repository.log_event(
+                "INFO",
+                "LIVE_RELEASE_GATE_PASSED",
+                "BUY HALT·미체결 0·정합성 조건을 확인했습니다",
+                context={"database": self.repository.db_path.name},
+            )
+        return LiveReleaseGateResult(unique)
