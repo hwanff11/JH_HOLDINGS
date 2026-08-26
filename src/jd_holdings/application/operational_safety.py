@@ -48,6 +48,20 @@ class OperatorSafetyService:
     def is_halted(self) -> bool:
         return self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
 
+    @staticmethod
+    def _cancel_is_confirmed(raw_order: dict[str, Any], broker_order_id: str) -> bool:
+        """Treat a cancellation as settled only when the original order says CANCELED.
+
+        Toss cancellation returns a separate operation order id. Acceptance of that
+        operation is not proof that the original order has already reached CANCELED;
+        it may still be PENDING_CANCEL, may have filled in the race, or the cancel may
+        later be rejected. Any state other than an explicitly matching CANCELED
+        original order remains uncertain until OrderMonitor/reconciliation proves it.
+        """
+        returned_id = str(raw_order.get("orderId") or "")
+        status = str(raw_order.get("status") or "").upper()
+        return returned_id == broker_order_id and status == "CANCELED"
+
     def halt(self) -> OperatorHaltResult:
         halted_at = datetime.now(UTC)
         canceled: list[str] = []
@@ -86,13 +100,19 @@ class OperatorSafetyService:
                     uncertain.append(client_order_id)
                     continue
                 try:
+                    # Toss returns a distinct cancellation-operation id here. Do not
+                    # call that proof of settlement; verify the ORIGINAL order below.
                     self.broker.cancel_order(broker_order_id)
+                    raw_original = self.broker.get_order(broker_order_id)
                 except Exception:
-                    # Do not guess whether the cancellation reached the broker. The
-                    # normal monitor/reconciliation loop will determine final state.
+                    # Do not guess whether cancellation reached the broker or whether
+                    # the order filled concurrently. Monitor/reconciliation proves it.
                     uncertain.append(client_order_id)
                 else:
-                    canceled.append(client_order_id)
+                    if self._cancel_is_confirmed(raw_original, broker_order_id):
+                        canceled.append(client_order_id)
+                    else:
+                        uncertain.append(client_order_id)
 
         self.repository.log_event(
             "SAFE_MODE",
