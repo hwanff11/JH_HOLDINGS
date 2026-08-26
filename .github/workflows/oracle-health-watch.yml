@@ -1,0 +1,135 @@
+name: Oracle JDSS Health Watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-jdss-health-watch
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    environment: oracle-dry-run
+    steps:
+      - name: Prepare pinned SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_jdss
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_jdss ~/.ssh/known_hosts
+
+      - name: Verify Oracle runtime from outside
+        id: verify
+        continue-on-error: true
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+        run: |
+          set -Eeuo pipefail
+          runner_epoch="$(date -u +%s)"
+          ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" \
+            "$SERVER_USER@$SERVER_HOST" \
+            "TARGET_DIR='$SERVER_TARGET_DIR' RUNNER_EPOCH='$runner_epoch' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          current="$(readlink -f "$TARGET_DIR/current")"
+          env_file="$TARGET_DIR/shared/.env"
+          db_path="$TARGET_DIR/shared/data/jdss.db"
+
+          test -d "$current"
+          test -f "$env_file"
+          test -f "$db_path"
+          test -x "$current/.venv/bin/jdss"
+          sudo systemctl is-enabled --quiet jh_holdings_bot
+          sudo systemctl is-active --quiet jh_holdings_bot
+
+          server_epoch="$(date -u +%s)"
+          drift=$(( server_epoch - RUNNER_EPOCH ))
+          if (( drift < 0 )); then drift=$(( -drift )); fi
+          if (( drift > 120 )); then
+            echo "server clock drift too large: ${drift}s" >&2
+            exit 1
+          fi
+
+          disk_use="$(df -P "$TARGET_DIR" | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
+          test -n "$disk_use"
+          if (( disk_use >= 90 )); then
+            echo "filesystem usage is ${disk_use}%" >&2
+            exit 1
+          fi
+
+          "$current/.venv/bin/python" - "$db_path" <<'PY'
+          import sqlite3
+          import sys
+
+          path = sys.argv[1]
+          connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+          try:
+              result = connection.execute("PRAGMA quick_check").fetchone()
+          finally:
+              connection.close()
+          if result is None or result[0] != "ok":
+              raise SystemExit(f"SQLite quick_check failed: {result}")
+          print("SQLITE_QUICK_CHECK=PASS")
+          PY
+
+          set -a
+          source "$env_file"
+          set +a
+          case "${JDSS_TRADING_MODE:-}" in
+            dry_run|live) ;;
+            *) echo "invalid JDSS_TRADING_MODE" >&2; exit 1 ;;
+          esac
+          "$current/.venv/bin/jdss" --config "$current/strategy.yaml" validate-config
+          "$current/.venv/bin/jdss" --config "$current/strategy.yaml" toss-smoke
+          echo "ORACLE_HEALTH=PASS mode=${JDSS_TRADING_MODE} sha=$(basename "$current") disk=${disk_use}% drift=${drift}s"
+          REMOTE
+
+      - name: Open or update health incident
+        if: steps.verify.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          title='[oracle-health] JH_HOLDINGS runtime health check failed'
+          existing="$(gh issue list --state open --search 'in:title [oracle-health] JH_HOLDINGS runtime health check failed' --json number --jq '.[0].number // empty')"
+          body="Oracle 외부 health watch가 실패했습니다. 신규 BUY 전 운영상태 확인이 필요합니다.\n\nActions run: $RUN_URL"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "$(printf '%b' "$body")"
+          else
+            gh issue create --title "$title" --body "$(printf '%b' "$body")"
+          fi
+          exit 1
+
+      - name: Close recovered health incident
+        if: steps.verify.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          existing="$(gh issue list --state open --search 'in:title [oracle-health] JH_HOLDINGS runtime health check failed' --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "외부 health watch가 정상 복구를 확인했습니다.\n\nActions run: $RUN_URL"
+            gh issue close "$existing" --reason completed
+          fi
