@@ -8,8 +8,8 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - GitHub `main`: 보호 브랜치, PR + 필수 CI 경유
-- 최신 runtime 기능 revision: **`ec05f778f7b55a01d6d58daec8d41fbbfe0f47c2`**
-- Oracle runtime 기능 revision: **`ec05f778f7b55a01d6d58daec8d41fbbfe0f47c2`**
+- 최신 runtime 기능 revision: **`b29196ea94e4bb94ae847f9c94cb47a8c2268799`**
+- Oracle runtime 기능 revision: **`b29196ea94e4bb94ae847f9c94cb47a8c2268799`**
 - Oracle 서비스: **active**
 - 현재 운용 모드: **forced dry-run**
 - `portfolio.live_enabled`: **false**
@@ -22,6 +22,62 @@
 runtime 영향이 없는 문서·CI·운영 workflow commit이 `main`에 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision 문자열은 항상 같을 필요는 없습니다. 현재 Oracle에는 최신 runtime 기능 revision이 forced dry-run으로 배포되어 있습니다.
 
 ## 2. 최근 완료
+
+### yfinance 현재가 일시적 빈 응답 내성 보강
+
+2026-08-26 저녁 배분 점검에서 `yfinance 현재가 조회 실패: QQQ`가 발생한 원인을 추적해 PR #239에서 현재가 조회 경로를 보강했습니다.
+
+원인:
+
+- 배분 점검이 다음 세션 목표수량을 만들 때 `MarketDataDryRunBroker.get_price()`가 yfinance 1분봉 현재가를 조회
+- 기존 `current_price()`는 `Ticker.history()`를 **단 1회** 호출하고 빈 응답이면 즉시 전체 배분 점검 오류로 전파
+- 일봉 조회에는 3회 재시도가 있었지만 현재가 조회에는 같은 장애내성이 없었음
+- 전략·배분 수학 오류가 아니라 Yahoo/yfinance의 일시적 빈 응답을 단일 조회 경로가 그대로 운영 오류로 확대하는 구조였음
+
+수정:
+
+- 현재가 조회를 최대 **3회 bounded retry**
+- 각 attempt에서 `Ticker.history()`가 비거나 예외면 같은 시점에 `yf.download()` 1분봉 대체 경로 사용
+- intraday yfinance 호출을 data-source lock으로 직렬화
+- stale 일봉이나 임의 종가를 현재가로 대체하지 않음
+- 두 현재가 경로가 모든 재시도에서 실패한 경우에만 기존처럼 `MarketDataError`로 **fail-closed**
+- V3.2.2 전략/배분/HWM75/50→75→100/주문·승인 로직은 변경 없음
+
+회귀테스트:
+
+- `Ticker.history()` 빈 응답 → 같은 attempt의 `yf.download()` 성공
+- 두 경로 일시 실패 → 다음 attempt 성공
+- 모든 경로 실패 → 3회 후 fail-closed
+
+PR #239 CI:
+
+- Quality Gate ✅
+- Security Gate ✅
+- canonical Backtest ✅
+
+merge/runtime revision: **`b29196ea94e4bb94ae847f9c94cb47a8c2268799`**
+
+Oracle forced dry-run 배포 run **32960842917**:
+
+- exact latest main 확인 PASS
+- focused deployment gate PASS, 집중테스트 50건 PASS
+- pinned SSH trust PASS
+- release/SQLite snapshot/forced dry-run smoke PASS
+- Toss read-only 인증 및 QQQ/TQQQ/SOXL 시세 smoke PASS
+- exact deployed SHA `b29196e...` 확인
+
+Runtime Verifier run **32961116752**:
+
+- focused V3.2.2 runtime safety tests PASS
+- pinned SSH PASS
+- Oracle runtime mode `dry_run` 확인
+- phase `pre_market` 확인
+- deployed SHA / runtime contract PASS
+- Telegram outbound runtime PASS
+- 재시작 검증은 시장 상태에 따라 **skipped**
+- verifier 전체 결론 **PASS**
+
+실계좌 LIVE-ARMED commissioning이나 실제 주문/canary는 수행하지 않았습니다.
 
 ### `/halt` 취소확정 fail-closed hardening
 
@@ -123,6 +179,7 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 ## 4. 실거래 준비 상태
 
 - **Oracle dry-run production:** GO
+- **yfinance intraday 현재가 장애내성:** GO
 - **Toss account read-only API:** GO
 - **Toss write-boundary 정적/회귀 검증:** GO
 - **`/halt` 취소확정 안전계층:** GO
@@ -162,6 +219,7 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 ## 6. 운영상 유지 원칙
 
 - 위험축소 SELL은 자동, 위험증가 BUY는 운영자 승인
+- 현재가 공급자 일시 오류는 bounded retry + 대체 intraday 경로로 흡수하되, 끝까지 가격을 증명하지 못하면 임의 stale 가격 대신 fail-closed
 - 긴급 이상 시 `/halt`로 BUY를 우선 차단하고 SELL·monitor·reconciliation은 유지
 - `/halt`의 취소 요청 성공을 원주문 취소 완료로 간주하지 않으며, 원주문 `CANCELED`가 확인되지 않으면 uncertain으로 유지
 - uncertain 취소·UNKNOWN·원장 불일치·미완료 위험축소는 신규 BUY보다 SAFE_MODE/reconciliation 우선
