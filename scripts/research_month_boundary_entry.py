@@ -202,7 +202,10 @@ def _table(lines: list[str], title: str, summary: dict[str, Any]) -> None:
         [
             f"- 표본: **{summary['samples']}개월**",
             "",
-            "| 평가 | 첫 거래일 진입 | reset 후 둘째 거래일 진입 | 대기안 중앙 차이 | 대기안 승률 | MDD 중앙 개선 |",
+            (
+                "| 평가 | 첫 거래일 진입 | reset 후 둘째 거래일 진입 | "
+                "대기안 중앙 차이 | 대기안 승률 | MDD 중앙 개선 |"
+            ),
             "|---|---:|---:|---:|---:|---:|",
         ]
     )
@@ -220,9 +223,18 @@ def _table(lines: list[str], title: str, summary: dict[str, Any]) -> None:
             "",
             "| 하방 지표 | 첫 거래일 진입 | reset 후 둘째 거래일 진입 |",
             "|---|---:|---:|",
-            f"| 21일 P10 | {_fmt(summary['first_p10_return_21_pct'])} | {_fmt(summary['wait_p10_return_21_pct'])} |",
-            f"| 63일 P10 | {_fmt(summary['first_p10_return_63_pct'])} | {_fmt(summary['wait_p10_return_63_pct'])} |",
-            f"| 63일 중앙 MDD | {_fmt(summary['first_median_mdd_63_pct'])} | {_fmt(summary['wait_median_mdd_63_pct'])} |",
+            (
+                f"| 21일 P10 | {_fmt(summary['first_p10_return_21_pct'])} | "
+                f"{_fmt(summary['wait_p10_return_21_pct'])} |"
+            ),
+            (
+                f"| 63일 P10 | {_fmt(summary['first_p10_return_63_pct'])} | "
+                f"{_fmt(summary['wait_p10_return_63_pct'])} |"
+            ),
+            (
+                f"| 63일 중앙 MDD | {_fmt(summary['first_median_mdd_63_pct'])} | "
+                f"{_fmt(summary['wait_median_mdd_63_pct'])} |"
+            ),
         ]
     )
 
@@ -248,7 +260,10 @@ def _render(payload: dict[str, Any]) -> str:
             "",
             "## 해석 원칙",
             "",
-            "- 대기안이 근소하게 좋아도 1세션 시장 타이밍 규칙을 추가할 만큼 일관되지 않으면 현행을 유지합니다.",
+            (
+                "- 대기안이 근소하게 좋아도 1세션 시장 타이밍 규칙을 추가할 만큼 "
+                "일관되지 않으면 현행을 유지합니다."
+            ),
             "- 특히 최근 4년, 9월, 1.50x prior leverage, reset 변경월, 현재 유사환경을 함께 봅니다.",
             "- 이 연구는 최초 계좌 시작 시점만 비교하며 V3.2.2의 장기 배분 규칙은 변경하지 않습니다.",
             "",
