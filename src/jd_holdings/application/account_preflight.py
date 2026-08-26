@@ -18,10 +18,12 @@ class AccountPreflightResult:
     checked_at: datetime
     issues: tuple[str, ...]
     buying_power: Decimal | None
+    managed_holdings: tuple[tuple[str, int], ...] = ()
 
     @property
     def safe(self) -> bool:
         return not self.issues
+
 
 
 def _lookup_failure(step: str, exc: Exception) -> str:
@@ -39,17 +41,24 @@ def _lookup_failure(step: str, exc: Exception) -> str:
 
 
 class RealAccountPreflight:
-    """Read-only guard that keeps a real Toss account separate from the dry-run ledger.
+    """Read-only guard for the real Toss account boundary.
 
-    V3.2.2 starts from an empty set of managed tickers. Existing QQQ/TQQQ/SOXL
-    holdings or open orders are never adopted into the JDSS ledger automatically.
-    Account discovery is checked first because Toss documents `GET /api/v1/accounts`
-    as the source of truth for `X-Tossinvest-Account: accountSeq`.
+    By default any pre-existing QQQ/TQQQ/SOXL holding is rejected. The only exception
+    is the explicit first-live commissioning path, which may request those integer
+    quantities as an *external baseline*. They remain outside JDSS ownership and are
+    still subject to duplicate/fractional/invalid/open-order fail-closed checks.
     """
 
-    def __init__(self, repository: SQLiteRepository, account_client: Any) -> None:
+    def __init__(
+        self,
+        repository: SQLiteRepository,
+        account_client: Any,
+        *,
+        allow_managed_holdings_as_external: bool = False,
+    ) -> None:
         self.repository = repository
         self.account_client = account_client
+        self.allow_managed_holdings_as_external = allow_managed_holdings_as_external
 
     def run(self) -> AccountPreflightResult:
         checked_at = datetime.now(UTC)
@@ -58,6 +67,7 @@ class RealAccountPreflight:
         holdings: list[dict[str, Any]] | None = None
         open_orders: list[dict[str, Any]] | None = None
         buying_power: Decimal | None = None
+        managed_holdings: tuple[tuple[str, int], ...] = ()
 
         try:
             accounts = self.account_client.get_accounts()
@@ -89,7 +99,13 @@ class RealAccountPreflight:
             issues.append(_lookup_failure("BUYING_POWER", exc))
 
         if holdings is not None and open_orders is not None and buying_power is not None:
-            issues.extend(self._inspect(holdings, open_orders, buying_power))
+            inspect_issues, managed_holdings = self._inspect(
+                holdings,
+                open_orders,
+                buying_power,
+                allow_managed_holdings_as_external=self.allow_managed_holdings_as_external,
+            )
+            issues.extend(inspect_issues)
 
         unique = tuple(dict.fromkeys(issues))
         self.repository.set_system_value(
@@ -105,25 +121,35 @@ class RealAccountPreflight:
                 "SAFE_MODE",
                 "REAL_ACCOUNT_PREFLIGHT_FAILED",
                 ";".join(unique),
-                context={"check": "read_only_empty_managed_symbols"},
+                context={"check": "read_only_account_boundary"},
             )
-        return AccountPreflightResult(checked_at, unique, buying_power)
+        return AccountPreflightResult(
+            checked_at,
+            unique,
+            buying_power,
+            managed_holdings,
+        )
 
     @staticmethod
     def _inspect(
         holdings: list[dict[str, Any]],
         open_orders: list[dict[str, Any]],
         buying_power: Decimal,
-    ) -> tuple[str, ...]:
+        *,
+        allow_managed_holdings_as_external: bool = False,
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, int], ...]]:
         issues: list[str] = []
         managed = set(ALLOCATION_SYMBOLS)
         seen_holdings: set[str] = set()
+        managed_quantities: dict[str, int] = {}
+        managed_rows: list[str] = []
 
         for item in holdings:
             symbol = str(item.get("symbol") or item.get("stockCode") or "").upper()
             if symbol not in managed:
                 continue
             seen_holdings.add(symbol)
+            managed_rows.append(symbol)
             raw_quantity = item.get("quantity", item.get("holdingQuantity", "0"))
             try:
                 quantity = Decimal(str(raw_quantity))
@@ -135,7 +161,11 @@ class RealAccountPreflight:
                 continue
             if quantity != quantity.to_integral_value():
                 issues.append(f"REAL_ACCOUNT_FRACTIONAL_HOLDING:{symbol}")
-            if quantity > 0:
+                continue
+
+            integer_quantity = int(quantity)
+            managed_quantities[symbol] = integer_quantity
+            if integer_quantity > 0 and not allow_managed_holdings_as_external:
                 issues.append(f"REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:{symbol}")
 
         for item in open_orders:
@@ -152,13 +182,15 @@ class RealAccountPreflight:
                 issues.append("REAL_ACCOUNT_INVALID_BUYING_POWER")
 
         # Multiple API rows for one managed ticker make the account response ambiguous.
-        managed_rows = [
-            str(item.get("symbol") or item.get("stockCode") or "").upper()
-            for item in holdings
-            if str(item.get("symbol") or item.get("stockCode") or "").upper() in managed
-        ]
         for symbol in seen_holdings:
             if managed_rows.count(symbol) > 1:
                 issues.append(f"REAL_ACCOUNT_DUPLICATE_HOLDING_ROWS:{symbol}")
 
-        return tuple(dict.fromkeys(issues))
+        normalized_holdings = tuple(
+            sorted(
+                (symbol, quantity)
+                for symbol, quantity in managed_quantities.items()
+                if quantity > 0
+            )
+        )
+        return tuple(dict.fromkeys(issues)), normalized_holdings
