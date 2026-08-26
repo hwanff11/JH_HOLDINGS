@@ -9,7 +9,7 @@ def _events() -> tuple[str, ...]:
     )
 
 
-def test_daily_portfolio_brief_replaces_internal_jargon_with_readable_summary():
+def test_daily_portfolio_brief_uses_balanced_summary():
     brief, remaining = _format_daily_portfolio_brief(
         "2026-08-25",
         _events(),
@@ -19,17 +19,20 @@ def test_daily_portfolio_brief_replaces_internal_jargon_with_readable_summary():
     assert remaining == ()
     assert brief is not None
     assert "JDSS 아침 운용 브리핑" in brief
-    assert "오늘 결론" in brief
-    assert "현재 즉시 승인할 신규 BUY는 없습니다" in brief
-    assert "QQQ</b>  <code>70.0%" in brief
-    assert "TQQQ</b> <code>17.5%" in brief
-    assert "SOXL</b> <code>12.5%" in brief
-    assert "1.50x" in brief
-    assert "강한 상승추세 단계" in brief
-    assert "반도체 상대강도 : ✅ 우위" in brief
-    assert "TQQQ ✅ 켜짐 / SOXL ➖ 꺼짐" in brief
-    assert "오늘 매수규모 계산 기준" in brief
-    assert "수익분의 75%만" in brief
+    assert "오늘의 결론" in brief
+    assert "현재 목표비중과 운용상태를 유지합니다" in brief
+    assert "지금 승인할 신규 매수 주문은 없습니다" in brief
+    assert "QQQ   <code>70.0%" in brief
+    assert "TQQQ <code>17.5%" in brief
+    assert "SOXL <code>12.5%" in brief
+    assert "시장상태 : <b>🟢 공격적 운용</b>" in brief
+    assert "목표 노출 : <code>1.50x</code>" in brief
+    assert "반도체 상대강도 : ✅ 강세" in brief
+    assert "추가 레버리지 : TQQQ ✅ / SOXL ➖" in brief
+    assert "현재 평가액 : <code>$50,000.00</code>" in brief
+    assert "최고 평가액 : <code>$50,000.00</code>" in brief
+    assert "투자규모 계산 기준 : <code>$50,000.00</code>" in brief
+    assert "수익의 75%만" in brief
     assert "RS6M" not in brief
     assert "위험예산" not in brief
     assert "완결종가 평가액" not in brief
@@ -43,7 +46,7 @@ def test_daily_portfolio_brief_highlights_buy_approval_when_signal_exists():
     )
 
     assert brief is not None
-    assert "매수 승인이 필요합니다" in brief
+    assert "신규 매수 승인이 필요합니다" in brief
     assert "오늘 매수 검토 가능" in brief
     assert remaining == ("TQQQ 3주 매수 승인 대기",)
 
