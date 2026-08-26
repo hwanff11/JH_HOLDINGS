@@ -1,0 +1,45 @@
+name: Month Boundary Entry Research
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_month_boundary_entry.py"
+      - "scripts/research_initial_entry_scenarios.py"
+      - "src/jd_holdings/research/initial_entry.py"
+      - ".github/workflows/research-month-boundary-entry.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  month-boundary-entry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --constraint requirements.lock -e '.[dev]'
+      - name: Ruff
+        run: ruff check scripts/research_month_boundary_entry.py
+      - name: Run month-boundary research
+        run: |
+          mkdir -p reports
+          python scripts/research_month_boundary_entry.py \
+            --output-json reports/month-boundary-entry.json \
+            --output-md reports/month-boundary-entry.md
+      - name: Publish summary
+        run: cat reports/month-boundary-entry.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: month-boundary-entry-${{ github.run_id }}
+          path: reports/month-boundary-entry.*
