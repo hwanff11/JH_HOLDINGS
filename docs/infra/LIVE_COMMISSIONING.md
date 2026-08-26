@@ -19,6 +19,7 @@
 5. 주문 결과가 불명확하면 blind retry보다 `UNKNOWN`/SAFE_MODE/reconciliation을 우선한다.
 6. broker side effect 가능 이후에는 과거 DB snapshot을 맹목적으로 복원하지 않는다.
 7. 배포 승인과 BUY 잠금 해제 승인은 서로 다른 행위다.
+8. 최초 commissioning은 **JDSS 전용 청정 실계좌**에서만 수행한다. 기존 개인 QQQ/TQQQ/SOXL 보유분을 자동 입양하거나 같은 계좌에서 공존시키지 않는다.
 
 ## 3. 최초 LIVE-ARMED 전환 게이트
 
@@ -26,7 +27,7 @@
 
 ### Source / CI
 
-- 보호된 `main`의 정확한 최신 SHA
+- 보호된 `main`의 정확한 최신 runtime SHA
 - Quality Gate PASS
 - Security Gate PASS
 - canonical Backtest PASS
@@ -42,13 +43,28 @@
 - 파일시스템 사용률 < 90%
 - Toss read-only smoke PASS
 
-### Toss 실계좌
+### Toss 실계좌 — 전용 청정계좌 계약
 
 최초 commissioning 시 `RealAccountPreflight`가 다음을 확인합니다.
 
-- QQQ/TQQQ/SOXL 기존 관리대상 보유 0
-- 관리대상 미체결 주문 0
+- QQQ 기존 보유 0
+- TQQQ 기존 보유 0
+- SOXL 기존 보유 0
+- QQQ/TQQQ/SOXL 관리대상 미체결 주문 0
 - USD 매수가능금액이 전략 초기자본 이상
+
+기존에 개인적으로 보유하던 QQQ/TQQQ/SOXL이 있다면 **commissioning 전에 다른 증권계좌로 이동**하는 것을 production 운영방식으로 합니다. 기존 보유량을 JDSS 원장에 자동 등록하거나 baseline으로 차감하여 공존시키지 않습니다.
+
+이 원칙을 두는 이유는 다음과 같습니다.
+
+- JDSS 자동 위험축소 SELL의 소유권 경계를 명확하게 유지
+- broker holdings와 JDSS 원장의 reconciliation을 단순하게 유지
+- 기존 개인 보유분의 평균단가·원가·수량을 JDSS HWM75 회계에 잘못 포함하는 위험 제거
+- 계좌 외부 수동매매가 JDSS 주문·원장으로 오인되는 위험 축소
+
+따라서 preflight가 `REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:<SYMBOL>`을 반환하면 **우회하지 않고 commissioning을 중단**합니다. 기존 보유분 이동과 미체결 주문 정리가 완료된 뒤 fresh live DB로 다시 시작합니다.
+
+commissioning 이후에도 동일 Toss 계좌의 QQQ/TQQQ/SOXL은 JDSS 외부에서 수동으로 별도 매매하지 않습니다. 불가피한 수동 조치가 발생하면 먼저 `/halt`하고 broker/DB reconciliation을 수행합니다.
 
 ### Live 원장
 
@@ -88,6 +104,8 @@ owner-only ChatOps 제목:
 ```
 
 이 과정은 실제 BUY 주문을 자동 제출하지 않습니다.
+
+실계좌 preflight가 기존 관리대상 보유나 미체결 주문을 발견하면 candidate live DB를 production live 원장으로 승격하지 않고 fail-closed 종료하며, 기존 forced dry-run 환경으로 복구합니다.
 
 ## 5. Systemd / DB 경계
 
@@ -257,11 +275,21 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 - 서버 측 BUY HALT 유지
 - 활성 승인 취소/TTL 만료 확인
 
+### JDSS 전용계좌에 외부/수동 관리종목 거래가 생긴 경우
+
+1. `/halt`
+2. QQQ/TQQQ/SOXL의 실제 보유·미체결 확인
+3. 임의로 DB 수량을 맞추거나 주문을 재전송하지 않음
+4. broker/DB reconciliation
+5. 원인과 실제 소유수량이 증명될 때까지 BUY 재개 금지
+
 ## 12. BUY 해제 전 최종 체크리스트
 
-- 대상 main SHA 확인
+- 대상 runtime SHA 확인
 - CI 3종 PASS
 - Oracle health PASS
+- 최초 commissioning이라면 QQQ/TQQQ/SOXL 기존 보유 0
+- QQQ/TQQQ/SOXL 외부 미체결 주문 0
 - `JDSS_TRADING_MODE=live`
 - live DB 경로 확인
 - `live_commissioned=1`
