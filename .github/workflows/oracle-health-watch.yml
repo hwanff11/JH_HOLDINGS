@@ -64,14 +64,28 @@ jobs:
           set -Eeuo pipefail
           current="$(readlink -f "$TARGET_DIR/current")"
           env_file="$TARGET_DIR/shared/.env"
-          db_path="$TARGET_DIR/shared/data/jdss.db"
 
           test -d "$current"
           test -f "$env_file"
-          test -f "$db_path"
           test -x "$current/.venv/bin/jdss"
           sudo systemctl is-enabled --quiet jh_holdings_bot
           sudo systemctl is-active --quiet jh_holdings_bot
+
+          set -a
+          source "$env_file"
+          set +a
+          case "${JDSS_TRADING_MODE:-}" in
+            dry_run)
+              db_path="${JDSS_DB_PATH:-$TARGET_DIR/shared/data/jdss.db}"
+              ;;
+            live)
+              test "${JDSS_LIVE_CONFIRMATION:-}" = "ENABLE_JDSS_LIVE_ORDERS"
+              db_path="${JDSS_DB_PATH:-}"
+              test "$db_path" = "$TARGET_DIR/shared/data/jdss-live.db"
+              ;;
+            *) echo "invalid JDSS_TRADING_MODE" >&2; exit 1 ;;
+          esac
+          test -f "$db_path"
 
           server_epoch="$(date -u +%s)"
           drift=$(( server_epoch - RUNNER_EPOCH ))
@@ -88,28 +102,32 @@ jobs:
             exit 1
           fi
 
-          "$current/.venv/bin/python" - "$db_path" <<'PY'
+          "$current/.venv/bin/python" - "$db_path" "${JDSS_TRADING_MODE}" <<'PY'
           import sqlite3
           import sys
 
-          path = sys.argv[1]
+          path, mode = sys.argv[1:]
           connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
           try:
               result = connection.execute("PRAGMA quick_check").fetchone()
+              if result is None or result[0] != "ok":
+                  raise SystemExit(f"SQLite quick_check failed: {result}")
+              if mode == "live":
+                  values = dict(connection.execute(
+                      "SELECT key, value FROM system_state "
+                      "WHERE key IN ('live_commissioned','operator_buy_halt')"
+                  ).fetchall())
+                  if values.get("live_commissioned") != "1":
+                      raise SystemExit("live ledger is not commissioned")
+                  halt = values.get("operator_buy_halt")
+                  if halt not in {"0", "1"}:
+                      raise SystemExit(f"invalid operator BUY halt state: {halt}")
+                  print(f"LIVE_COMMISSIONED=PASS BUY_HALT={halt}")
           finally:
               connection.close()
-          if result is None or result[0] != "ok":
-              raise SystemExit(f"SQLite quick_check failed: {result}")
           print("SQLITE_QUICK_CHECK=PASS")
           PY
 
-          set -a
-          source "$env_file"
-          set +a
-          case "${JDSS_TRADING_MODE:-}" in
-            dry_run|live) ;;
-            *) echo "invalid JDSS_TRADING_MODE" >&2; exit 1 ;;
-          esac
           "$current/.venv/bin/jdss" --config "$current/strategy.yaml" validate-config
           "$current/.venv/bin/jdss" --config "$current/strategy.yaml" toss-smoke
           echo "ORACLE_HEALTH=PASS mode=${JDSS_TRADING_MODE} sha=$(basename "$current") disk=${disk_use}% drift=${drift}s"
@@ -155,7 +173,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$VERIFY_OUTCOME" == "success" ]]; then
-            body="✅ Oracle 외부 health check PASS. SSH/systemd/SQLite/clock/disk/config/Toss read-only 상태가 정상입니다.\n\nActions run: $RUN_URL"
+            body="✅ Oracle 외부 health check PASS. SSH/systemd/SQLite/clock/disk/config/Toss read-only 상태가 정상입니다. LIVE인 경우 commissioning marker와 별도 live DB도 확인했습니다.\n\nActions run: $RUN_URL"
           else
             body="❌ Oracle 외부 health check FAIL. 별도 [oracle-health] incident를 확인해 주세요.\n\nActions run: $RUN_URL"
           fi
