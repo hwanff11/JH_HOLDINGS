@@ -1,10 +1,17 @@
+import importlib.util
+from pathlib import Path
+
 import pandas as pd
 
-from scripts.research_initial_entry_scenarios import (
-    _market_context,
-    _select_current_like_rows,
-    _worst_lump_comparison,
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "research_initial_entry_scenarios.py"
+SPEC = importlib.util.spec_from_file_location("research_initial_entry_scenarios", SCRIPT_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("initial-entry research script를 테스트에 로드할 수 없습니다")
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+_market_context = MODULE._market_context
+_select_current_like_rows = MODULE._select_current_like_rows
+_worst_lump_comparison = MODULE._worst_lump_comparison
 
 
 def test_market_context_uses_only_history_through_timestamp():
@@ -26,7 +33,7 @@ def test_current_like_selection_relaxes_only_when_sample_count_is_small():
         for scenario in ("LUMP_100", "CURRENT_50_75_100_3D"):
             rows.append(
                 {
-                    "start_date": f"2025-01-{day + 1:02d}",
+                    "start_date": f"sample-{day + 1:02d}",
                     "scenario": scenario,
                     "prior_leverage": 1.5,
                     "context_qqq_above_sma200": True,
