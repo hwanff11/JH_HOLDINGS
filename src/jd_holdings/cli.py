@@ -17,7 +17,7 @@ from jd_holdings.config import load_config
 from jd_holdings.core.v322_allocation import V322Policy
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
-from jd_holdings.infrastructure.toss_client import TossClient
+from jd_holdings.infrastructure.toss_client import TossApiError, TossClient
 from jd_holdings.settings import load_runtime_settings
 
 
@@ -37,6 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--refresh", action="store_true")
     backtest.add_argument("--output", type=Path)
     subparsers.add_parser("toss-smoke", help="주문 없이 Toss 인증·시세·장상태만 조회")
+    subparsers.add_parser(
+        "toss-account-smoke",
+        help="개인 잔고/계좌번호를 출력하지 않고 Toss 계좌 API 접근성만 read-only 점검",
+    )
     live_preflight = subparsers.add_parser(
         "live-preflight",
         help="별도 신규 live DB와 실계좌의 최초기동 안전조건 점검",
@@ -53,6 +57,69 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _toss_error_summary(exc: Exception) -> dict[str, object]:
+    result: dict[str, object] = {"type": type(exc).__name__}
+    if isinstance(exc, TossApiError):
+        if exc.status_code is not None:
+            result["http_status"] = exc.status_code
+        if exc.code:
+            result["code"] = exc.code
+        result["retryable"] = exc.retryable
+    return result
+
+
+def _toss_account_smoke() -> int:
+    """Read-only account endpoint diagnostics safe for a public Actions log."""
+    client = TossClient()
+    checks: dict[str, dict[str, object]] = {}
+    all_ok = True
+
+    try:
+        accounts = client.get_accounts()
+        configured = str(client.account_seq).strip()
+        configured_available = any(
+            str(item.get("accountSeq", "")).strip() == configured for item in accounts
+        )
+        checks["accounts"] = {
+            "ok": True,
+            "configured_account_available": configured_available,
+        }
+        if not configured_available:
+            all_ok = False
+    except Exception as exc:
+        checks["accounts"] = {"ok": False, "error": _toss_error_summary(exc)}
+        all_ok = False
+
+    readonly_calls = (
+        ("holdings", client.get_holdings),
+        ("open_orders", lambda: client.list_orders(status="OPEN")),
+        ("buying_power", lambda: client.get_buying_power("USD")),
+    )
+    for name, call in readonly_calls:
+        try:
+            call()
+        except Exception as exc:
+            checks[name] = {"ok": False, "error": _toss_error_summary(exc)}
+            all_ok = False
+        else:
+            # Do not expose account balances, holdings, order counts or account numbers.
+            checks[name] = {"ok": True}
+
+    print(
+        json.dumps(
+            {
+                "safe": all_ok,
+                "read_only": True,
+                "private_financial_values_redacted": True,
+                "checks": checks,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if all_ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
@@ -62,6 +129,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     settings = load_runtime_settings()
+    if args.command == "toss-account-smoke":
+        return _toss_account_smoke()
+
     repository = SQLiteRepository(settings.database_path, config)
     if args.command == "init-db":
         print(f"OK database={settings.database_path}")
@@ -77,11 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "safe": result.safe,
                     "issues": list(result.issues),
-                    "buying_power": (
-                        str(result.buying_power)
-                        if result.buying_power is not None
-                        else None
-                    ),
+                    "private_financial_values_redacted": True,
                     "commissioned_and_buy_halt_armed": bool(
                         result.safe and args.arm_buy_halt
                     ),
