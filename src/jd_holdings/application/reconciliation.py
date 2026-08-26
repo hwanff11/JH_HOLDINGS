@@ -9,6 +9,7 @@ from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
 
 from .broker import Broker
 from .database import SQLiteRepository
+from .external_baseline import external_baseline_quantity
 
 
 def _missing_broker_id_issue(
@@ -84,6 +85,7 @@ class ReconciliationService:
                 position = self.repository.get_position(symbol)
                 booster_qty = position.quantity
                 booster_state = position.state
+            baseline_qty = external_baseline_quantity(self.repository, symbol)
             holding = broker_holdings.get(symbol)
             raw_broker_qty = (
                 holding.get("quantity", holding.get("holdingQuantity", "0"))
@@ -97,7 +99,8 @@ class ReconciliationService:
                 quantity_invalid = True
             else:
                 quantity_invalid = not broker_qty.is_finite() or broker_qty < 0
-            expected_total = core_qty + booster_qty
+            expected_managed = core_qty + booster_qty
+            expected_total = baseline_qty + expected_managed
             issues: list[str] = []
 
             if symbol in duplicate_symbols:
@@ -113,11 +116,17 @@ class ReconciliationService:
                 issues.append(
                     f"V322_DIRECT_BOOSTER_STATE_PRESENT:{booster_state.value}:{booster_qty}"
                 )
-            if Decimal(expected_total) != broker_qty:
+            if not quantity_invalid and Decimal(expected_total) != broker_qty:
                 issues.append(f"BROKER_DB_QTY_MISMATCH:{broker_qty}!={expected_total}")
-            if expected_total == 0 and broker_qty > 0:
+            if not quantity_invalid and baseline_qty > 0 and broker_qty < baseline_qty:
+                issues.append("BROKER_BELOW_EXTERNAL_BASELINE")
+            if (
+                not quantity_invalid
+                and expected_managed == 0
+                and broker_qty > baseline_qty
+            ):
                 issues.append("UNMANAGED_PERSONAL_ALLOCATION_SYMBOL")
-            if expected_total > 0 and broker_qty == 0:
+            if expected_managed > 0 and not quantity_invalid and broker_qty < baseline_qty + 1:
                 issues.append("DB_POSITION_BROKER_EMPTY")
 
             plan = self.repository.active_tp_plan(symbol) if symbol in self.config.enabled_symbols else None
