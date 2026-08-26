@@ -18,6 +18,7 @@ SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 ORDER_SIDES = {"BUY", "SELL"}
 ORDER_TYPES = {"LIMIT", "MARKET"}
 AUTH_MAX_ATTEMPTS = 3
+SAFE_AUTH_REPLAY_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 class TossApiError(RuntimeError):
@@ -88,6 +89,10 @@ class TossClient:
         with self._token_lock:
             if self._access_token and not force:
                 return self._access_token
+            if force:
+                # A failed refresh must not leave the rejected token cached for the
+                # next explicit operator-approved request.
+                self._access_token = None
 
             last_error: TossApiError | None = None
             for attempt in range(AUTH_MAX_ATTEMPTS):
@@ -159,9 +164,10 @@ class TossClient:
         retry_auth: bool = True,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        normalized_method = method.upper()
         try:
             response = self.session.request(
-                method,
+                normalized_method,
                 f"{self.BASE_URL}{path}",
                 headers=self._headers(require_account=require_account),
                 timeout=self.timeout,
@@ -172,14 +178,25 @@ class TossClient:
         except requests.RequestException as exc:
             raise TossApiError("토스 API 네트워크 오류", retryable=True) from exc
         if response.status_code == 401 and retry_auth:
-            self.authenticate(force=True)
-            return self._request(
-                method,
-                path,
-                require_account=require_account,
-                retry_auth=False,
-                **kwargs,
-            )
+            original_error = self._api_error(response)
+            try:
+                # Refresh the token so the next explicit write attempt can proceed,
+                # but never automatically replay a side-effecting request. Only
+                # read-only methods may be repeated after the refresh.
+                self.authenticate(force=True)
+            except TossApiError:
+                # authenticate(force=True) already cleared the rejected cached token.
+                # The original 401 is the strongest evidence about this request.
+                pass
+            if normalized_method in SAFE_AUTH_REPLAY_METHODS and self._access_token:
+                return self._request(
+                    normalized_method,
+                    path,
+                    require_account=require_account,
+                    retry_auth=False,
+                    **kwargs,
+                )
+            raise original_error
         if not response.ok:
             raise self._api_error(response)
         return self._json_object(response, "토스 API")
@@ -227,6 +244,20 @@ class TossClient:
             request_id=request_id,
             retryable=retryable,
         )
+
+    @staticmethod
+    def _decimal_places(value: Decimal) -> int:
+        normalized = value.normalize()
+        return max(0, -normalized.as_tuple().exponent)
+
+    @classmethod
+    def _validate_us_limit_price(cls, price: Decimal) -> None:
+        allowed_places = 4 if price < Decimal("1") else 2
+        if cls._decimal_places(price) > allowed_places:
+            raise ValueError(
+                "미국주식 지정가 자릿수가 토스 주문 규격을 초과합니다 "
+                f"(${price}: 최대 소수 {allowed_places}자리)"
+            )
 
     def get_prices(self, symbols: list[str] | tuple[str, ...]) -> dict[str, Decimal]:
         if not symbols:
@@ -349,6 +380,8 @@ class TossClient:
             request.price is None or not request.price.is_finite() or request.price <= 0
         ):
             raise ValueError("지정가 주문에는 0보다 큰 유한 price가 필요합니다")
+        if order_type == "LIMIT" and request.price is not None:
+            self._validate_us_limit_price(request.price)
         payload: dict[str, Any] = {
             "clientOrderId": request.client_order_id,
             "symbol": symbol,
@@ -373,7 +406,19 @@ class TossClient:
         payload = self._request(
             "POST", f"/api/v1/orders/{order_id}/cancel", require_account=True, json={}
         )
-        return str(payload.get("result", {}).get("orderId", order_id))
+        result = payload.get("result")
+        if not isinstance(result, dict) or not result.get("orderId"):
+            raise TossApiError(
+                "토스 주문취소 성공 응답의 operation orderId를 확인할 수 없습니다",
+                retryable=True,
+            )
+        operation_order_id = str(result["orderId"])
+        if operation_order_id == order_id:
+            raise TossApiError(
+                "토스 주문취소 응답의 operation orderId가 원주문과 동일합니다",
+                retryable=True,
+            )
+        return operation_order_id
 
 
 def receipt_from_order(order: dict[str, Any], client_order_id: str = "") -> OrderReceipt:
