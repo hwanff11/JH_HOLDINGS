@@ -8,7 +8,9 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - GitHub `main`: 보호 브랜치, PR + 필수 CI 경유
+- GitHub `main` runtime hardening revision: **`fff58fd0613c49cf2b1fb31a5126518aa8bcaaba`**
 - Oracle runtime 기능 revision: **`29b198321a69050651a4ed12242a4eca19d22d13`**
+- 배포 정합성: **main의 Toss 주문 식별자 hardening이 Oracle forced dry-run에 아직 미배포**
 - Oracle 서비스: **active**
 - 운용 모드: **forced dry-run**
 - `portfolio.live_enabled`: **false**
@@ -19,7 +21,7 @@
 - BUY 차단 해제: **reconciliation PASS + 미체결 BUY 0 + `/resume RESUME_BUYS`**
 - 외부 Oracle health watch: **매시간 실행 + on-demand 실검증 PASS**
 
-`main`에 Oracle runtime 영향이 없는 문서·CI·운영 workflow commit이 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision이 항상 같은 문자열일 필요는 없습니다. **runtime 코드·설정이 달라졌는데 Oracle revision이 뒤처진 경우만 배포 불일치**로 봅니다.
+`main`에 Oracle runtime 영향이 없는 문서·CI·운영 workflow commit이 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision이 항상 같은 문자열일 필요는 없습니다. 현재는 PR #217이 runtime 코드를 변경했으므로 **의도적으로 배포 대기 상태**입니다. Oracle forced dry-run 배포는 별도 명시적 배포 승인 후 수행하며, 이 대기는 live 활성화를 의미하지 않습니다.
 
 ## 2. 최근 완료
 
@@ -39,6 +41,19 @@ PR #209를 통해 전략 수학이나 매매비중을 변경하지 않고 실거
 - live에서는 broker side effect 가능 이후 과거 DB snapshot을 맹목적으로 복원하지 않고 broker를 Source of Truth로 reconciliation하도록 runbook 확정
 
 현재 live hard lock은 **그대로 유지**합니다. 위 기능은 실거래 잠금을 해제하지 않으며, 실제 Toss 주문 활성화는 별도 live-enablement PR과 명시적 승인 전까지 금지입니다.
+
+### Toss 주문 식별자 write-path hardening
+
+PR #217에서 실거래 write-path commissioning 전에 주문 생성 응답의 식별자 검증을 fail-closed로 강화했습니다.
+
+- JDSS가 전송한 `clientOrderId`가 주문 생성 응답에 없으면 로컬 요청값으로 임의 보충하지 않음
+- 응답 `clientOrderId` 누락/불일치 시 주문 성공을 확정하지 않고 기존 OrderManager 검증을 통해 `UNKNOWN`으로 유지
+- broker 주문내역·보유수량 조회와 reconciliation으로 상태를 증명하기 전 동일 주문을 임의 재전송하지 않음
+- Toss 공식 멱등성 유효시간 10분을 commissioning 계약에 명시
+- 10분 이후 동일 `clientOrderId`를 blind resubmit하지 않고 live DB 원장 + broker reconciliation을 장기 중복방지 기준으로 사용
+- 회귀테스트 추가, PR의 Quality/Security/Backtest 모두 PASS
+
+merge revision: **`fff58fd0613c49cf2b1fb31a5126518aa8bcaaba`**
 
 ### Oracle 배포 및 독립 검증
 
@@ -82,9 +97,10 @@ owner-only `[oracle-health-check]` 경로를 실제 실행해 Oracle 바깥에�
 - Quality Gate ✅
 - Security Gate ✅
 - JDSS V3 canonical Backtest ✅
+- Toss 주문 식별자 fail-closed 회귀테스트 ✅
 - focused operational deployment tests 39건 ✅
-- forced dry-run Oracle 배포·smoke ✅
-- 독립 Runtime Verifier ✅
+- forced dry-run Oracle 배포·smoke ✅ (`29b198...` 기준)
+- 독립 Runtime Verifier ✅ (`29b198...` 기준)
 - 외부 hourly/on-demand Oracle health watch ✅
 - pinned SSH trust·DB snapshot·rollback-safe dry-run release ✅
 - Toss read-only smoke ✅
@@ -93,11 +109,14 @@ owner-only `[oracle-health-check]` 경로를 실제 실행해 Oracle 바깥에�
 - fresh live-ledger commissioning preflight ✅
 - live hard lock ✅
 
+PR #217의 주문 식별자 hardening은 GitHub CI까지 완료됐지만 Oracle forced dry-run에는 아직 미배포입니다. 따라서 해당 변경의 Oracle 배포·runtime verifier는 **배포 승인 후 추가 확인 대상**입니다.
+
 ## 4. 실거래 준비 상태
 
 현재 평가는 다음과 같습니다.
 
-- **Dry-run production 운영:** GO
+- **현재 Oracle dry-run production 운영:** GO
+- **GitHub main 최신 runtime hardening:** CI PASS / Oracle 배포 대기
 - **실거래용 안전 인프라/절차:** 준비 완료 단계
 - **실제 live BUY 활성화:** 아직 LOCKED / 별도 승인 필요
 
@@ -130,9 +149,10 @@ fresh live DB
 
 ## 6. 다음 우선순위
 
-1. 다음 정상 일일 분석 시점에 아침 운용 브리핑과 `/halt`/대시보드 상태표시를 실제 운영 루틴에서 관찰
-2. forced dry-run에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패 / 긴급 BUY 차단` 시나리오 지속 관찰
-3. 실거래 전환 시점에 **별도 신규 live DB**를 생성하고 `live-preflight --arm-buy-halt`를 당일 실계좌 상태로 실행
-4. 실제 Toss write-path commissioning과 live 전용 deploy/recovery를 별도 PR에서 검증
-5. 모든 Go-Live 체크리스트 PASS 후에만 별도 명시적 승인으로 live 잠금을 해제
-6. QLD/SSO 등 연구 후보는 production과 분리하여 유지
+1. PR #217 주문 식별자 hardening을 **명시적 배포 승인 후** Oracle forced dry-run에 배포하고 Runtime Verifier 재실행
+2. 다음 정상 일일 분석 시점에 아침 운용 브리핑과 `/halt`/대시보드 상태표시를 실제 운영 루틴에서 관찰
+3. forced dry-run에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패 / 긴급 BUY 차단` 시나리오 지속 관찰
+4. 실거래 전환 시점에 **별도 신규 live DB**를 생성하고 `live-preflight --arm-buy-halt`를 당일 실계좌 상태로 실행
+5. 실제 Toss write-path commissioning과 live 전용 deploy/recovery를 별도 PR에서 검증
+6. 모든 Go-Live 체크리스트 PASS 후에만 별도 명시적 승인으로 live 잠금을 해제
+7. QLD/SSO 등 연구 후보는 production과 분리하여 유지
