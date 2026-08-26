@@ -59,6 +59,35 @@ def test_operator_halt_blocks_buy_at_order_manager_boundary(tmp_path, config):
     assert repository.get_order_by_client_id(request.client_order_id) is None
 
 
+def test_invalid_live_confirmation_fails_before_order_reservation(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "ops.db", config)
+    broker = DryRunBroker({"TQQQ": Decimal("100")}, buying_power=Decimal("50000"))
+    settings = RuntimeSettings(
+        trading_mode="live",
+        live_confirmation="WRONG_CONFIRMATION",
+        telegram_bot_token=None,
+        allowed_chat_ids=(123,),
+        database_path=tmp_path / "ops.db",
+        log_path=tmp_path / "ops.log",
+    )
+    manager = OrderManager(repository, broker, settings)
+    request = OrderRequest(
+        client_order_id="LOCKED-LIVE-BUY",
+        symbol="TQQQ",
+        side="BUY",
+        order_type="LIMIT",
+        quantity=1,
+        price=Decimal("100"),
+        purpose="CORE_REBALANCE_BUY",
+    )
+
+    with pytest.raises(PermissionError, match="실주문 잠금"):
+        manager.submit(request, cycle_id=None)
+
+    assert broker.sequence == 0
+    assert repository.get_order_by_client_id(request.client_order_id) is None
+
+
 def test_operator_halt_keeps_risk_reducing_sell_available(tmp_path, config):
     repository = SQLiteRepository(tmp_path / "ops.db", config)
     broker = DryRunBroker({"TQQQ": Decimal("100")}, buying_power=Decimal("49900"))
