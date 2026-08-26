@@ -4,9 +4,8 @@ config_version: "3.2.2"
 portfolio:
   enabled: true
   total_capital: 50000
-  live_enabled: true
-  # Live capability is enabled only behind fresh-live-DB commissioning,
-  # exact live confirmation, startup BUY HALT, and Telegram operator resume.
+  live_enabled: false
+  # Legacy parser fields retained for backward-compatible component tests.
   # V3.2.2 allocation weights are defined by market_regime.v322_allocation below.
   core_initial_weight: 0.10
   core_target_weight: 0.15
