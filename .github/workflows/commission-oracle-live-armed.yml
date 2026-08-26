@@ -54,10 +54,12 @@ jobs:
           python -m ruff check .
           python -m pytest \
             tests/test_live_commissioning.py \
+            tests/test_live_runtime_safety.py \
             tests/test_operational_safety.py \
             tests/test_managed_account_safety.py \
             tests/test_order_flow.py \
-            tests/test_deployment_contract.py
+            tests/test_deployment_contract.py \
+            tests/test_live_deployment_contract.py
           jdss validate-config
           grep -q 'live_enabled: false' strategy.yaml
           grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml
