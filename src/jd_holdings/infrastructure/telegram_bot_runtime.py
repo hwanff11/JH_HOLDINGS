@@ -31,12 +31,36 @@ _CAPITAL_EVENT_RE = re.compile(
 
 def _leverage_label(value: float) -> str:
     if value <= 0.5:
-        return "방어 단계"
+        return "🔵 방어적 운용"
     if value <= 1.0:
-        return "기본 단계"
+        return "🟡 기본 운용"
     if value <= 1.25:
-        return "상승추세 단계"
-    return "강한 상승추세 단계"
+        return "🟢 상승추세 운용"
+    return "🟢 공격적 운용"
+
+
+def _plain_strategy_summary(
+    leverage: float,
+    *,
+    rs_active: bool,
+    tqqq_active: bool,
+    soxl_active: bool,
+) -> str:
+    if leverage <= 0.5:
+        return "시장 변동성이 높아 위험노출을 줄이고 방어적으로 운용하는 상태입니다."
+    if leverage <= 1.0:
+        return "시장 방향성이 강하지 않아 기본 노출을 유지하며 과도한 레버리지를 피하는 상태입니다."
+    if rs_active:
+        base = "기술주 상승추세가 우호적이고 반도체도 상대적으로 강해 QQQ를 중심으로 TQQQ·SOXL 비중을 함께 가져가는 상태입니다."
+    else:
+        base = "기술주 상승추세는 우호적이지만 반도체 상대강도 우위는 없어 QQQ·TQQQ 중심으로 운용하는 상태입니다."
+    if tqqq_active and soxl_active:
+        return base + " TQQQ와 SOXL 모두 추가 레버리지 조건도 충족했습니다."
+    if tqqq_active:
+        return base + " TQQQ 추가 레버리지 조건만 충족했습니다."
+    if soxl_active:
+        return base + " SOXL 추가 레버리지 조건만 충족했습니다."
+    return base
 
 
 def _format_daily_portfolio_brief(
@@ -68,45 +92,54 @@ def _format_daily_portfolio_brief(
     rs_active = allocation_match.group("rs") == "ON"
     tqqq_active = allocation_match.group("tqqq") == "ON"
     soxl_active = allocation_match.group("soxl") == "ON"
+    risk_reduction = any("위험축소" in event for event in remaining)
 
     lines = [
-        f"🌅 <b>[JDSS 아침 운용 브리핑 · {html.escape(trade_date)}]</b>",
+        "🌅 <b>[JDSS 아침 운용 브리핑]</b>",
+        f"기준일 : <code>{html.escape(trade_date)}</code>",
         "",
-        "✅ <b>오늘 결론</b>",
+        "✅ <b>오늘의 결론</b>",
     ]
-    if has_buy_signals:
+    if risk_reduction:
         lines.extend(
             [
-                "• 목표비중에 맞추기 위한 <b>매수 승인이 필요합니다.</b>",
-                "• 아래에 이어지는 <b>‘오늘 매수 검토 가능’</b>에서 한 번에 확인해 주세요.",
+                "현재 <b>위험축소 매도가 진행 중</b>입니다.",
+                "매도와 계좌·원장 정합성 확인이 끝날 때까지 신규 매수는 자동 차단됩니다.",
+            ]
+        )
+    elif has_buy_signals:
+        lines.extend(
+            [
+                "목표비중 조정을 위한 <b>신규 매수 승인이 필요합니다.</b>",
+                "아래에 이어지는 <b>‘오늘 매수 검토 가능’</b>에서 최종 확인해 주세요.",
             ]
         )
     else:
         lines.extend(
             [
-                "• 현재 즉시 승인할 신규 BUY는 없습니다.",
-                "• 주문 필요 여부는 <code>/today</code>에서 언제든 다시 확인할 수 있습니다.",
+                "현재 목표비중과 운용상태를 유지합니다.",
+                "<b>지금 승인할 신규 매수 주문은 없습니다.</b>",
             ]
         )
 
     lines.extend(
         [
             "",
-            "🎯 <b>오늘의 목표 비중</b>",
-            f"• <b>QQQ</b>  <code>{float(allocation_match.group('qqq')):.1f}%</code>",
-            f"• <b>TQQQ</b> <code>{float(allocation_match.group('tqqq_weight')):.1f}%</code>",
-            f"• <b>SOXL</b> <code>{float(allocation_match.group('soxl_weight')):.1f}%</code>",
+            "🎯 <b>현재 목표 비중</b>",
+            f"• QQQ   <code>{float(allocation_match.group('qqq')):.1f}%</code>",
+            f"• TQQQ <code>{float(allocation_match.group('tqqq_weight')):.1f}%</code>",
+            f"• SOXL <code>{float(allocation_match.group('soxl_weight')):.1f}%</code>",
             "",
-            "📈 <b>왜 이 비중인가요?</b>",
-            f"• 시장 노출 단계 : <code>{leverage:.2f}x</code> · {_leverage_label(leverage)}",
-            (
-                "• 반도체 상대강도 : ✅ 우위 · SOXL 기본 비중 사용"
-                if rs_active
-                else "• 반도체 상대강도 : ➖ 우위 아님 · SOXL 기본 비중 미사용"
-            ),
-            "• 추가매수 판단 : "
-            f"TQQQ {'✅ 켜짐' if tqqq_active else '➖ 꺼짐'} / "
-            f"SOXL {'✅ 켜짐' if soxl_active else '➖ 꺼짐'}",
+            "📈 <b>전략 판단</b>",
+            f"• 시장상태 : <b>{_leverage_label(leverage)}</b>",
+            f"• 목표 노출 : <code>{leverage:.2f}x</code>",
+            f"• 반도체 상대강도 : {'✅ 강세' if rs_active else '➖ 우위 아님'}",
+            "• 추가 레버리지 : "
+            f"TQQQ {'✅' if tqqq_active else '➖'} / "
+            f"SOXL {'✅' if soxl_active else '➖'}",
+            "",
+            "쉽게 말하면,",
+            f"<b>{_plain_strategy_summary(leverage, rs_active=rs_active, tqqq_active=tqqq_active, soxl_active=soxl_active)}</b>",
         ]
     )
 
@@ -117,19 +150,22 @@ def _format_daily_portfolio_brief(
         lines.extend(
             [
                 "",
-                "💵 <b>운용 자금</b>",
-                f"• 오늘 매수규모 계산 기준 : <code>${risk}</code>",
-                f"• 최고 평가 기준(HWM) : <code>${hwm}</code>",
-                f"• 전일 완결종가 기준 평가액 : <code>${equity}</code>",
-                "• HWM75는 수익이 늘었을 때 <b>수익분의 75%만</b> 다음 투자 규모에 반영하는 안전장치입니다.",
+                "💵 <b>자금관리</b>",
+                f"• 현재 평가액 : <code>${equity}</code>",
+                f"• 최고 평가액 : <code>${hwm}</code>",
+                f"• 투자규모 계산 기준 : <code>${risk}</code>",
+                "",
+                "HWM75 적용 중",
+                "→ 향후 수익이 발생하면 <b>수익의 75%만</b> 다음 투자규모 확대에 반영합니다.",
             ]
         )
 
     lines.extend(
         [
             "",
-            "💡 <code>/today</code> = 실제 주문 필요 여부 · "
-            "<code>/portfolio</code> = 상세 보유/목표 확인",
+            "━━━━━━━━━━━━━━",
+            "🧾 실제 주문 필요 여부 → <code>/today</code>",
+            "📊 상세 보유·목표 → <code>/portfolio</code>",
         ]
     )
     return "\n".join(lines), tuple(remaining)
