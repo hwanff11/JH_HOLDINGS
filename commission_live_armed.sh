@@ -60,9 +60,14 @@ shared_dir="$target_dir/shared"
 env_file="$shared_dir/.env"
 live_db="$shared_dir/data/jdss-live.db"
 candidate_db="$shared_dir/data/jdss-live-candidate-${commit_sha}.db"
-env_backup="$shared_dir/backups/env-before-live-armed-${commit_sha}.env"
+env_backup="/tmp/jdss-env-before-live-armed-${commit_sha}"
 service_unit="/etc/systemd/system/${service_name}.service"
-unit_backup="$shared_dir/backups/${service_name}-before-live-armed-${commit_sha}.service"
+unit_backup="/tmp/${service_name}-before-live-armed-${commit_sha}.service"
+
+cleanup_temp() {
+  rm -f "$env_backup"
+  sudo rm -f "$unit_backup"
+}
 
 if [[ "$(basename "$current_dir")" != "$commit_sha" ]]; then
   echo "Oracle current가 commission 대상 main SHA와 다릅니다." >&2
@@ -86,8 +91,9 @@ if [[ ! -x "$current_dir/.venv/bin/jdss" || ! -x "$current_dir/.venv/bin/jdss-bo
 fi
 grep -q 'live_enabled: false' "$current_dir/strategy.yaml"
 
-mkdir -p "$shared_dir/data" "$shared_dir/backups"
+mkdir -p "$shared_dir/data"
 rm -f "$candidate_db" "${candidate_db}-wal" "${candidate_db}-shm"
+cleanup_temp
 cp "$env_file" "$env_backup"
 sudo cp "$service_unit" "$unit_backup"
 chmod 600 "$env_backup"
@@ -114,6 +120,7 @@ rollback() {
   if [[ -f "$live_db" ]]; then
     mv "$live_db" "${live_db}.failed-${commit_sha}" 2>/dev/null || true
   fi
+  cleanup_temp
   exit "$rc"
 }
 trap rollback ERR
@@ -187,6 +194,7 @@ assert values.get('operator_buy_halt') == '1', values
 PY
 
 trap - ERR
+cleanup_temp
 echo "LIVE-ARMED commissioning verified: commit=$commit_sha db=$live_db BUY_HALT=1"
 REMOTE
 
