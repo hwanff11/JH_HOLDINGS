@@ -6,6 +6,11 @@ import pytest
 
 from jd_holdings.application.broker import DryRunBroker
 from jd_holdings.application.database import SQLiteRepository
+from jd_holdings.application.external_baseline import (
+    capture_external_baseline,
+    external_baseline_quantity,
+    external_baseline_symbols,
+)
 from jd_holdings.application.live_commissioning import (
     LIVE_COMMISSIONED_KEY,
     LiveCommissioningPreflight,
@@ -56,6 +61,8 @@ def test_fresh_separate_live_db_passes_empty_account_preflight(tmp_path, config)
     assert result.safe
     assert result.issues == ()
     assert result.buying_power == Decimal("50000")
+    assert result.external_baseline_symbols == ()
+    assert external_baseline_symbols(repository) == ()
 
 
 def test_live_preflight_arms_commissioned_fail_closed_buy_halt(tmp_path, config):
@@ -102,16 +109,53 @@ def test_live_preflight_rejects_missing_configured_account_seq(tmp_path, config)
     assert "REAL_ACCOUNT_CONFIGURED_SEQ_NOT_FOUND" in result.issues
 
 
-def test_live_preflight_rejects_existing_managed_real_holding(tmp_path, config):
+def test_live_preflight_captures_existing_managed_holding_as_external_baseline(
+    tmp_path, config
+):
     repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
     client = _AccountClient(
-        holdings=[{"symbol": "TQQQ", "quantity": "1"}],
+        holdings=[{"symbol": "SOXL", "quantity": "7"}],
+    )
+
+    result = LiveCommissioningPreflight(repository, client).run()
+
+    assert result.safe
+    assert result.issues == ()
+    assert result.external_baseline_symbols == ("SOXL",)
+    assert external_baseline_quantity(repository, "SOXL") == 7
+    assert external_baseline_quantity(repository, "TQQQ") == 0
+    assert not any("7" in issue for issue in result.issues)
+
+
+def test_live_preflight_rejects_fractional_managed_holding_instead_of_baselining(
+    tmp_path, config
+):
+    repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
+    client = _AccountClient(
+        holdings=[{"symbol": "SOXL", "quantity": "0.5"}],
     )
 
     result = LiveCommissioningPreflight(repository, client).run()
 
     assert not result.safe
-    assert "REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:TQQQ" in result.issues
+    assert "REAL_ACCOUNT_FRACTIONAL_HOLDING:SOXL" in result.issues
+    assert external_baseline_symbols(repository) == ()
+
+
+def test_live_preflight_rejects_managed_open_order_even_with_external_holding(
+    tmp_path, config
+):
+    repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
+    client = _AccountClient(
+        holdings=[{"symbol": "SOXL", "quantity": "7"}],
+        open_orders=[{"symbol": "SOXL", "status": "PENDING"}],
+    )
+
+    result = LiveCommissioningPreflight(repository, client).run()
+
+    assert not result.safe
+    assert "REAL_ACCOUNT_OPEN_ORDER_PRESENT:SOXL" in result.issues
+    assert external_baseline_symbols(repository) == ()
 
 
 def test_live_preflight_rejects_reused_nonfresh_ledger(tmp_path, config):
@@ -143,6 +187,15 @@ def test_live_preflight_rejects_insufficient_buying_power_without_exposing_amoun
     assert not result.safe
     assert "LIVE_BUYING_POWER_BELOW_CAPITAL" in result.issues
     assert not any("49999" in issue for issue in result.issues)
+
+
+def test_external_baseline_is_immutable_after_capture(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
+
+    assert capture_external_baseline(repository, {"SOXL": 7}) == ("SOXL",)
+    assert capture_external_baseline(repository, {"SOXL": 7}) == ("SOXL",)
+    with pytest.raises(RuntimeError, match="자동 변경"):
+        capture_external_baseline(repository, {"SOXL": 8})
 
 
 def _release_broker() -> DryRunBroker:
@@ -206,6 +259,45 @@ def test_live_release_gate_allows_reconciled_existing_managed_position(tmp_path,
 
     assert result.safe
     assert result.issues == ()
+
+
+def test_live_release_gate_allows_frozen_external_baseline_without_adopting_it(
+    tmp_path, config
+):
+    repository = SQLiteRepository(tmp_path / "release.db", config)
+    broker = _release_broker()
+    broker.holdings["SOXL"] = {
+        "quantity": 7,
+        "averagePurchasePrice": Decimal("40"),
+    }
+    capture_external_baseline(repository, {"SOXL": 7})
+    _commission_release_ledger(repository)
+
+    result = LiveReleaseGate(repository, broker).run()
+
+    assert result.safe
+    assert result.issues == ()
+    assert int(repository.get_core_position("SOXL")["qty"]) == 0
+
+
+def test_live_release_gate_rejects_external_baseline_drift(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "release.db", config)
+    broker = _release_broker()
+    broker.holdings["SOXL"] = {
+        "quantity": 6,
+        "averagePurchasePrice": Decimal("40"),
+    }
+    capture_external_baseline(repository, {"SOXL": 7})
+    _commission_release_ledger(repository)
+
+    result = LiveReleaseGate(repository, broker).run()
+
+    assert not result.safe
+    assert any(
+        issue.startswith("LIVE_RELEASE_RECONCILIATION_FAILED:SOXL:")
+        and "BROKER_BELOW_EXTERNAL_BASELINE" in issue
+        for issue in result.issues
+    )
 
 
 def test_live_release_gate_rejects_even_matching_open_order(tmp_path, config):
