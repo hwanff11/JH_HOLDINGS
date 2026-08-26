@@ -8,8 +8,8 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - GitHub `main`: 보호 브랜치, PR + 필수 CI 경유
-- 최신 runtime 기능 revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
-- Oracle runtime 기능 revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
+- 최신 runtime 기능 revision: **`ec05f778f7b55a01d6d58daec8d41fbbfe0f47c2`**
+- Oracle runtime 기능 revision: **`ec05f778f7b55a01d6d58daec8d41fbbfe0f47c2`**
 - Oracle 서비스: **active**
 - 현재 운용 모드: **forced dry-run**
 - `portfolio.live_enabled`: **false**
@@ -19,9 +19,53 @@
 - BUY 재개: **reconciliation PASS + 미체결 BUY 0 + 운영자 명시적 `/resume`**
 - 외부 Oracle health watch: **매시간 + owner-only on-demand**
 
-runtime 영향이 없는 문서·CI·운영 workflow commit이 `main`에 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision 문자열은 항상 같을 필요가 없습니다. 현재 Oracle에는 최신 runtime 기능 revision이 forced dry-run으로 배포되어 있습니다.
+runtime 영향이 없는 문서·CI·운영 workflow commit이 `main`에 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision 문자열은 항상 같을 필요는 없습니다. 현재 Oracle에는 최신 runtime 기능 revision이 forced dry-run으로 배포되어 있습니다.
 
 ## 2. 최근 완료
+
+### `/halt` 취소확정 fail-closed hardening
+
+PR #235에서 운영자 긴급 BUY 차단 시 **취소 요청 접수와 실제 원주문 취소 완료를 분리**하도록 보강했습니다.
+
+- `/halt`는 먼저 BUY 차단 barrier를 설정하고 기존 미체결 BUY에 취소 요청을 보냄
+- `cancel_order()` HTTP/API 성공만으로 취소 완료를 선언하지 않음
+- 취소 요청 후 **원래 broker `orderId`를 다시 조회**
+- 조회한 원주문이 동일 `orderId`이고 상태가 `CANCELED`일 때만 `canceled_order_ids`로 확정
+- `PENDING_CANCEL`, 취소 중 동시 `FILLED`, 상태조회 실패, 다른 `orderId` snapshot 등은 모두 `uncertain_order_ids`
+- uncertain 주문은 임의 재주문/역매매하지 않고 OrderMonitor + broker/DB reconciliation으로 최종상태를 증명
+- SELL·monitor·reconciliation과 기존 BUY HALT/SAFE_MODE 경계는 유지
+
+회귀테스트에는 정상 취소확정, PENDING_CANCEL, cancel/fill race, 취소 후 조회 실패, 다른 orderId 응답을 포함했습니다.
+
+PR #235 CI:
+
+- Quality Gate ✅
+- Security Gate ✅
+- canonical Backtest ✅
+
+merge/runtime revision: **`ec05f778f7b55a01d6d58daec8d41fbbfe0f47c2`**
+
+Oracle forced dry-run 배포 run **32953151181**:
+
+- exact latest main 확인 PASS
+- focused deployment gate PASS
+- pinned SSH trust PASS
+- release/SQLite snapshot/forced dry-run smoke PASS
+- Toss read-only smoke PASS
+- exact deployed SHA `ec05f778...` 확인
+
+Runtime Verifier run **32953437894**:
+
+- focused V3.2.2 runtime safety tests PASS
+- pinned SSH PASS
+- Oracle runtime mode `dry_run` 확인
+- phase `pre_market` 확인
+- deployed SHA / runtime contract PASS
+- Telegram outbound runtime PASS
+- 재시작 검증은 당시 안전조건에 따라 **skipped**
+- verifier 전체 결론 **PASS**
+
+실계좌 LIVE-ARMED commissioning이나 실제 주문/canary는 수행하지 않았습니다.
 
 ### Toss write-path no-replay hardening
 
@@ -43,34 +87,6 @@ PR #231 CI:
 - canonical Backtest ✅
 
 merge/runtime revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
-
-### Oracle forced dry-run 배포 및 독립 검증
-
-PR #231 merge revision을 Oracle에 forced dry-run으로 배포했습니다.
-
-배포 run **32951632082**:
-
-- exact latest main 확인 PASS
-- focused deployment gate PASS
-- pinned SSH trust PASS
-- release별 venv PASS
-- SQLite snapshot / rollback-safe 전환 PASS
-- live 잠금 유지 PASS
-- Toss read-only smoke PASS
-- exact deployed SHA `163cfd9...` 확인
-
-Runtime Verifier run **32951883450**:
-
-- focused V3.2.2 runtime safety tests PASS
-- pinned SSH PASS
-- Oracle runtime mode `dry_run` 확인
-- phase `pre_market` 확인
-- deployed SHA / runtime contract PASS
-- Telegram outbound runtime PASS
-- 재시작 검증은 당시 안전조건에 따라 **skipped**
-- verifier 전체 결론 **PASS**
-
-실계좌 LIVE-ARMED commissioning이나 실제 주문/canary는 수행하지 않았습니다.
 
 ### 실계좌 read-only commissioning 검증
 
@@ -109,6 +125,7 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 - **Oracle dry-run production:** GO
 - **Toss account read-only API:** GO
 - **Toss write-boundary 정적/회귀 검증:** GO
+- **`/halt` 취소확정 안전계층:** GO
 - **live commissioning 코드/절차:** 준비됨
 - **실계좌 최초 commissioning:** 계좌 청정화 전까지 BLOCKED
 - **LIVE-ARMED:** 아직 아님
@@ -146,10 +163,11 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 
 - 위험축소 SELL은 자동, 위험증가 BUY는 운영자 승인
 - 긴급 이상 시 `/halt`로 BUY를 우선 차단하고 SELL·monitor·reconciliation은 유지
+- `/halt`의 취소 요청 성공을 원주문 취소 완료로 간주하지 않으며, 원주문 `CANCELED`가 확인되지 않으면 uncertain으로 유지
+- uncertain 취소·UNKNOWN·원장 불일치·미완료 위험축소는 신규 BUY보다 SAFE_MODE/reconciliation 우선
 - `N건 순차 실행`은 원자적 basket이 아니며 일부 주문만 제출될 수 있음
 - 이미 제출된 주문을 임의 역매매하여 자동 rollback하지 않음
 - dry-run 원장과 live 원장을 절대 혼용하지 않음
-- UNKNOWN·원장 불일치·미완료 위험축소는 신규 BUY보다 SAFE_MODE 우선
 - broker side effect 가능 이후 과거 DB snapshot을 현재 broker 상태 위에 맹목 복원하지 않음
 - Oracle 배포 승인, LIVE-ARMED commissioning, BUY 잠금 해제 승인을 서로 다른 행위로 취급
 - QLD/SSO/v3.3 연구는 production V3.2.2와 계속 분리
