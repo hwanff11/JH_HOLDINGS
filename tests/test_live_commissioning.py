@@ -23,10 +23,17 @@ class _AccountClient:
         holdings=None,
         open_orders=None,
         buying_power=Decimal("50000"),
+        account_seq="1",
+        accounts=None,
     ) -> None:
         self.holdings = holdings or []
         self.open_orders = open_orders or []
         self.buying_power = buying_power
+        self.account_seq = account_seq
+        self.accounts = accounts if accounts is not None else [{"accountSeq": int(account_seq)}]
+
+    def get_accounts(self):
+        return list(self.accounts)
 
     def get_holdings(self):
         return list(self.holdings)
@@ -85,6 +92,16 @@ def test_live_restart_always_rearms_buy_halt(tmp_path, config):
     )
 
 
+def test_live_preflight_rejects_missing_configured_account_seq(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
+    client = _AccountClient(account_seq="2", accounts=[{"accountSeq": 1}])
+
+    result = LiveCommissioningPreflight(repository, client).run()
+
+    assert not result.safe
+    assert "REAL_ACCOUNT_CONFIGURED_SEQ_NOT_FOUND" in result.issues
+
+
 def test_live_preflight_rejects_existing_managed_real_holding(tmp_path, config):
     repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
     client = _AccountClient(
@@ -117,14 +134,15 @@ def test_live_preflight_rejects_reused_nonfresh_ledger(tmp_path, config):
     assert "LIVE_DB_NOT_FRESH:orders:1" in result.issues
 
 
-def test_live_preflight_rejects_insufficient_buying_power(tmp_path, config):
+def test_live_preflight_rejects_insufficient_buying_power_without_exposing_amount(tmp_path, config):
     repository = SQLiteRepository(tmp_path / "live" / "jdss.db", config)
     client = _AccountClient(buying_power=Decimal("49999"))
 
     result = LiveCommissioningPreflight(repository, client).run()
 
     assert not result.safe
-    assert any(issue.startswith("LIVE_BUYING_POWER_BELOW_CAPITAL:") for issue in result.issues)
+    assert "LIVE_BUYING_POWER_BELOW_CAPITAL" in result.issues
+    assert not any("49999" in issue for issue in result.issues)
 
 
 def _release_broker() -> DryRunBroker:
