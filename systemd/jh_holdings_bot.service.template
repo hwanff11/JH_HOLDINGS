@@ -10,7 +10,6 @@ Group=__SERVER_USER__
 WorkingDirectory=__TARGET_DIR__/current
 EnvironmentFile=__TARGET_DIR__/shared/.env
 Environment=PYTHONUNBUFFERED=1
-Environment=JDSS_DB_PATH=__TARGET_DIR__/shared/data/jdss.db
 Environment=JDSS_LOG_PATH=__TARGET_DIR__/shared/logs/jdss.log
 Environment=JDSS_CACHE_PATH=__TARGET_DIR__/shared/data/cache
 Environment=JDSS_CONFIG_PATH=__TARGET_DIR__/current/strategy.yaml
