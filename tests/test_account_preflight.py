@@ -52,6 +52,7 @@ def test_real_account_preflight_accepts_empty_managed_tickers(tmp_path, config):
 
     assert result.safe
     assert result.buying_power == Decimal("50000")
+    assert result.managed_holdings == ()
     assert repository.get_system_value(REAL_ACCOUNT_PREFLIGHT_SAFE_MODE_KEY) == "0"
     assert repository.get_system_value(REAL_ACCOUNT_PREFLIGHT_AT_KEY)
 
@@ -72,11 +73,54 @@ def test_real_account_preflight_blocks_managed_holdings_and_orders(tmp_path, con
     assert set(result.issues) == {
         "REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:QQQ",
         "REAL_ACCOUNT_FRACTIONAL_HOLDING:SOXL",
-        "REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:SOXL",
         "REAL_ACCOUNT_OPEN_ORDER_PRESENT:TQQQ",
     }
+    assert result.managed_holdings == (("QQQ", 2),)
     assert repository.get_system_value(REAL_ACCOUNT_PREFLIGHT_SAFE_MODE_KEY) == "1"
     assert repository.recent_events(1)[0]["event_type"] == "REAL_ACCOUNT_PREFLIGHT_FAILED"
+
+
+def test_real_account_preflight_can_discover_whole_shares_for_explicit_external_baseline(
+    tmp_path, config
+):
+    repository = SQLiteRepository(tmp_path / "preflight.db", config)
+    client = AccountClient(
+        holdings=[
+            {"symbol": "SOXL", "quantity": "7"},
+            {"symbol": "QQQM", "quantity": "3"},
+        ]
+    )
+
+    result = RealAccountPreflight(
+        repository,
+        client,
+        allow_managed_holdings_as_external=True,
+    ).run()
+
+    assert result.safe
+    assert result.issues == ()
+    assert result.managed_holdings == (("SOXL", 7),)
+
+
+def test_external_baseline_mode_still_rejects_fractional_and_open_order(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "preflight.db", config)
+    client = AccountClient(
+        holdings=[{"symbol": "SOXL", "quantity": "0.5"}],
+        orders=[{"symbol": "SOXL", "status": "PENDING"}],
+    )
+
+    result = RealAccountPreflight(
+        repository,
+        client,
+        allow_managed_holdings_as_external=True,
+    ).run()
+
+    assert not result.safe
+    assert set(result.issues) == {
+        "REAL_ACCOUNT_FRACTIONAL_HOLDING:SOXL",
+        "REAL_ACCOUNT_OPEN_ORDER_PRESENT:SOXL",
+    }
+    assert result.managed_holdings == ()
 
 
 def test_real_account_preflight_rejects_unknown_configured_account(tmp_path, config):
