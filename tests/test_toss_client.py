@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+import requests
 
 from jd_holdings.core.models import OrderRequest
 from jd_holdings.infrastructure.toss_client import TossApiError, TossClient
@@ -42,7 +43,15 @@ class FakeSession:
             return FakeResponse({"result": {"orders": []}})
         if url.endswith("/api/v1/accounts"):
             return FakeResponse(
-                {"result": [{"accountNo": "PRIVATE", "accountSeq": 1, "accountType": "BROKERAGE"}]}
+                {
+                    "result": [
+                        {
+                            "accountNo": "PRIVATE",
+                            "accountSeq": 1,
+                            "accountType": "BROKERAGE",
+                        }
+                    ]
+                }
             )
         if url.endswith("/api/v1/holdings"):
             return FakeResponse({"result": {"items": []}})
@@ -104,12 +113,21 @@ def test_official_account_discovery_is_source_for_account_scoped_reads():
         request
         for method, url, request in session.requests
         if method == "GET"
-        and any(url.endswith(path) for path in ("/api/v1/holdings", "/api/v1/orders", "/api/v1/buying-power"))
+        and any(
+            url.endswith(path)
+            for path in (
+                "/api/v1/holdings",
+                "/api/v1/orders",
+                "/api/v1/buying-power",
+            )
+        )
     ]
     assert account_scoped
     assert all(item["headers"]["X-Tossinvest-Account"] == "1" for item in account_scoped)
     accounts_call = next(
-        request for method, url, request in session.requests if url.endswith("/api/v1/accounts")
+        request
+        for method, url, request in session.requests
+        if url.endswith("/api/v1/accounts")
     )
     assert "X-Tossinvest-Account" not in accounts_call["headers"]
 
@@ -199,3 +217,97 @@ def test_api_error_uses_response_header_request_id_fallback():
     assert error.status_code == 404
     assert error.code == "account-not-found"
     assert error.request_id == "request-123"
+
+
+def test_auth_retries_retryable_token_failure_without_order_side_effect(monkeypatch):
+    sleeps = []
+
+    class RetrySession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.auth_calls = 0
+
+        def post(self, url, **kwargs):
+            self.requests.append(("POST", url, kwargs))
+            self.auth_calls += 1
+            if self.auth_calls == 1:
+                return FakeResponse(
+                    {"error": {"code": "rate-limited", "message": "retry"}},
+                    status_code=429,
+                    headers={"Retry-After": "0"},
+                )
+            return FakeResponse({"access_token": "retry-token", "expires_in": 86400})
+
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.toss_client.time.sleep", sleeps.append
+    )
+    session = RetrySession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    assert client.authenticate() == "retry-token"
+    assert session.auth_calls == 2
+    assert sleeps == [0.25]
+    assert not any(
+        method == "POST" and url.endswith("/api/v1/orders")
+        for method, url, _ in session.requests
+    )
+
+
+def test_auth_retries_network_failure_but_stays_bounded(monkeypatch):
+    sleeps = []
+
+    class NetworkRetrySession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.auth_calls = 0
+
+        def post(self, url, **kwargs):
+            self.auth_calls += 1
+            if self.auth_calls < 3:
+                raise requests.ConnectionError("temporary")
+            return FakeResponse({"access_token": "network-recovered"})
+
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.toss_client.time.sleep", sleeps.append
+    )
+    session = NetworkRetrySession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    assert client.authenticate() == "network-recovered"
+    assert session.auth_calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_auth_does_not_retry_nonretryable_credential_failure(monkeypatch):
+    sleeps = []
+
+    class RejectSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.auth_calls = 0
+
+        def post(self, url, **kwargs):
+            self.auth_calls += 1
+            return FakeResponse(
+                {"error": {"code": "invalid-client", "message": "denied"}},
+                status_code=401,
+            )
+
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.toss_client.time.sleep", sleeps.append
+    )
+    session = RejectSession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    with pytest.raises(TossApiError) as raised:
+        client.authenticate()
+
+    assert raised.value.status_code == 401
+    assert session.auth_calls == 1
+    assert sleeps == []
