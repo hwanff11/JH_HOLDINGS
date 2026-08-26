@@ -24,6 +24,10 @@ def _settings(tmp_path: Path, *, mode: str = "live", confirmation: str | None = 
     )
 
 
+def _config(*, portfolio_enabled: bool = True):
+    return SimpleNamespace(portfolio=SimpleNamespace(enabled=portfolio_enabled))
+
+
 def test_runtime_routes_dry_run_to_default_bot(monkeypatch, tmp_path):
     called: list[str] = []
     monkeypatch.setattr(runtime, "load_runtime_settings", lambda: _settings(tmp_path, mode="dry_run"))
@@ -74,10 +78,23 @@ def test_live_bot_rejects_bad_confirmation_before_config(monkeypatch, tmp_path):
         live_bot.main()
 
 
+def test_live_bot_rejects_disabled_portfolio_before_broker(monkeypatch, tmp_path):
+    monkeypatch.setattr(live_bot, "load_runtime_settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr(live_bot, "load_config", lambda _path: _config(portfolio_enabled=False))
+    monkeypatch.setattr(
+        live_bot,
+        "TossClient",
+        lambda: pytest.fail("broker must not be created when portfolio is disabled"),
+    )
+
+    with pytest.raises(RuntimeError, match="portfolio가 비활성화"):
+        live_bot.main()
+
+
 def test_live_bot_arms_buy_halt_before_broker_and_starts_app(monkeypatch, tmp_path):
     sequence: list[str] = []
     settings = _settings(tmp_path)
-    config = SimpleNamespace()
+    config = _config()
     repository = SimpleNamespace()
     broker = SimpleNamespace()
     reconciliation = SimpleNamespace(run=lambda: {})
@@ -123,7 +140,7 @@ def test_live_bot_arms_buy_halt_before_broker_and_starts_app(monkeypatch, tmp_pa
 
 def test_live_bot_notifies_startup_reconciliation_mismatch(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
-    config = SimpleNamespace()
+    config = _config()
     repository = SimpleNamespace()
     broker = SimpleNamespace()
     mismatch = {"TQQQ": ["BROKER_DB_QTY_MISMATCH"]}
