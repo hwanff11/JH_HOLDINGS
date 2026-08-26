@@ -55,6 +55,8 @@ jobs:
             tests/test_v322_dry_run.py
             tests/test_managed_account_safety.py
             tests/test_operational_faults.py
+            tests/test_operational_safety.py
+            tests/test_live_commissioning.py
           )
           python -m pytest "${deployment_tests[@]}"
           jdss validate-config
