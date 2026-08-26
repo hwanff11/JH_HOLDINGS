@@ -55,6 +55,7 @@ jobs:
           python -m pytest \
             tests/test_live_commissioning.py \
             tests/test_live_runtime_safety.py \
+            tests/test_live_entrypoints.py \
             tests/test_operational_safety.py \
             tests/test_managed_account_safety.py \
             tests/test_order_flow.py \
