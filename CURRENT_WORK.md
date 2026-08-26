@@ -17,7 +17,7 @@
 - SGOV 자동운용: **OFF**
 - 운영자 긴급 BUY 차단: **`/halt` 지원**
 - BUY 차단 해제: **reconciliation PASS + 미체결 BUY 0 + `/resume RESUME_BUYS`**
-- 외부 Oracle health watch: **매시간 실행 + on-demand ChatOps 지원**
+- 외부 Oracle health watch: **매시간 실행 + on-demand 실검증 PASS**
 
 `main`에 Oracle runtime 영향이 없는 문서·CI·운영 workflow commit이 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision이 항상 같은 문자열일 필요는 없습니다. **runtime 코드·설정이 달라졌는데 Oracle revision이 뒤처진 경우만 배포 불일치**로 봅니다.
 
@@ -59,6 +59,22 @@ PR #209를 통해 전략 수학이나 매매비중을 변경하지 않고 실거
 배포 run: **32935072232**  
 Runtime verifier run: **32935336557**
 
+### Oracle 외부 Health Watch 실검증
+
+owner-only `[oracle-health-check]` 경로를 실제 실행해 Oracle 바깥에서 운영상태를 재검증했습니다.
+
+- pinned SSH trust PASS
+- systemd enabled/active PASS
+- SQLite `PRAGMA quick_check` PASS
+- 서버 clock drift 기준 PASS
+- 디스크 사용률 기준 PASS
+- strategy/config validation PASS
+- Toss read-only 인증·시세·시장일자 smoke PASS
+- PASS 결과를 trigger Issue에 자동 기록 후 completed로 자동 종료 PASS
+- checkout 없는 workflow의 GitHub CLI repo context 문제는 PR #214에서 `GH_REPO`를 명시해 수정
+
+최종 on-demand health run: **32937917449**
+
 ## 3. 기준 검증 상태
 
 현재 production V3.2.2는 다음 게이트를 유지합니다.
@@ -69,6 +85,7 @@ Runtime verifier run: **32935336557**
 - focused operational deployment tests 39건 ✅
 - forced dry-run Oracle 배포·smoke ✅
 - 독립 Runtime Verifier ✅
+- 외부 hourly/on-demand Oracle health watch ✅
 - pinned SSH trust·DB snapshot·rollback-safe dry-run release ✅
 - Toss read-only smoke ✅
 - Telegram outbound runtime smoke ✅
@@ -113,10 +130,9 @@ fresh live DB
 
 ## 6. 다음 우선순위
 
-1. Oracle 외부 health watch의 실제 on-demand 실행까지 검증하고 이후 매시간 자동 감시 유지
-2. 다음 정상 일일 분석 시점에 아침 운용 브리핑과 `/halt`/대시보드 상태표시를 실제 운영 루틴에서 관찰
-3. forced dry-run에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패 / 긴급 BUY 차단` 시나리오 지속 관찰
-4. 실거래 전환 시점에 **별도 신규 live DB**를 생성하고 `live-preflight --arm-buy-halt`를 당일 실계좌 상태로 실행
-5. 실제 Toss write-path commissioning과 live 전용 deploy/recovery를 별도 PR에서 검증
-6. 모든 Go-Live 체크리스트 PASS 후에만 별도 명시적 승인으로 live 잠금을 해제
-7. QLD/SSO 등 연구 후보는 production과 분리하여 유지
+1. 다음 정상 일일 분석 시점에 아침 운용 브리핑과 `/halt`/대시보드 상태표시를 실제 운영 루틴에서 관찰
+2. forced dry-run에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패 / 긴급 BUY 차단` 시나리오 지속 관찰
+3. 실거래 전환 시점에 **별도 신규 live DB**를 생성하고 `live-preflight --arm-buy-halt`를 당일 실계좌 상태로 실행
+4. 실제 Toss write-path commissioning과 live 전용 deploy/recovery를 별도 PR에서 검증
+5. 모든 Go-Live 체크리스트 PASS 후에만 별도 명시적 승인으로 live 잠금을 해제
+6. QLD/SSO 등 연구 후보는 production과 분리하여 유지
