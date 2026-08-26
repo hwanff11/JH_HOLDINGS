@@ -56,7 +56,7 @@ if [[ "$SKIP_LOCAL_CHECKS" == "0" ]]; then
 fi
 
 grep -q 'JDSS-3.2.2-RS6M-ONEWAY-HWM75' strategy.yaml
-grep -q 'live_enabled: false' strategy.yaml
+grep -q 'live_enabled: true' strategy.yaml
 COMMIT_SHA="$(git rev-parse HEAD)"
 ARCHIVE_PATH="$(mktemp "/tmp/jh_holdings_${COMMIT_SHA}.XXXXXX.tar.gz")"
 SERVICE_PATH="$(mktemp "/tmp/jh_holdings_service.XXXXXX")"
@@ -148,10 +148,10 @@ if [[ -z "$previous_current" || ! -d "$previous_current" ]]; then
   exit 1
 fi
 
-# Always force the deployed runtime to remain dry-run. The currently running
-# process keeps its already-loaded environment until the controlled restart.
-sed -i '/^JDSS_TRADING_MODE=/d;/^JDSS_LIVE_CONFIRMATION=/d' "$env_file"
-printf '\nJDSS_TRADING_MODE=dry_run\nJDSS_LIVE_CONFIRMATION=\n' >> "$env_file"
+# Standard deployment always remains dry-run even though the codebase now has a
+# separately commissioned live capability. It also pins the dry-run DB explicitly.
+sed -i '/^JDSS_TRADING_MODE=/d;/^JDSS_LIVE_CONFIRMATION=/d;/^JDSS_DB_PATH=/d' "$env_file"
+printf '\nJDSS_TRADING_MODE=dry_run\nJDSS_LIVE_CONFIRMATION=\nJDSS_DB_PATH=%s\n' "$db_path" >> "$env_file"
 chmod 600 "$env_file"
 
 # Prepare and validate the new release before stopping the old service.
@@ -165,7 +165,7 @@ tar -xzf "$remote_archive" -C "$release_dir"
 "$release_dir/.venv/bin/python" -m pip install \
   --constraint "$release_dir/requirements.lock" "$release_dir"
 "$release_dir/.venv/bin/jdss" --config "$release_dir/strategy.yaml" validate-config
-grep -q 'live_enabled: false' "$release_dir/strategy.yaml"
+grep -q 'live_enabled: true' "$release_dir/strategy.yaml"
 
 # Standard deploy never crosses config generations. A version change requires a
 # dedicated migration plan, backup proof and compatibility tests.
@@ -254,6 +254,7 @@ source "$env_file"
 set +a
 test "${JDSS_TRADING_MODE:-}" = "dry_run"
 test -z "${JDSS_LIVE_CONFIRMATION:-}"
+test "${JDSS_DB_PATH:-}" = "$db_path"
 "$target_dir/current/.venv/bin/jdss" --config "$target_dir/current/strategy.yaml" init-db
 "$target_dir/current/.venv/bin/jdss" --config "$target_dir/current/strategy.yaml" validate-config
 
