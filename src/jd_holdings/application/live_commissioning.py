@@ -22,9 +22,9 @@ class LiveCommissioningResult:
 class LiveCommissioningPreflight:
     """Fail-closed checks for a fresh, separate live ledger before first activation.
 
-    This does not enable live trading.  It proves only that the prospective live DB
+    This does not enable live trading. It proves only that the prospective live DB
     is clean, the real account has no unmanaged JDSS symbols/open orders, and enough
-    USD buying power is visible.  The actual live unlock remains a separate change.
+    USD buying power is visible. The actual live unlock remains a separate change.
     """
 
     def __init__(self, repository: SQLiteRepository, account_client: Any) -> None:
@@ -77,11 +77,15 @@ class LiveCommissioningPreflight:
 
     def _inspect_local_ledger(self) -> tuple[str, ...]:
         issues: list[str] = []
+        count_queries = (
+            ("orders", "SELECT COUNT(*) FROM orders"),
+            ("signals", "SELECT COUNT(*) FROM signals"),
+            ("approvals", "SELECT COUNT(*) FROM approvals"),
+            ("trades", "SELECT COUNT(*) FROM trades"),
+        )
         with self.repository.transaction() as connection:
-            for table in ("orders", "signals", "approvals", "trades"):
-                count = int(
-                    connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                )
+            for table, query in count_queries:
+                count = int(connection.execute(query).fetchone()[0])
                 if count:
                     issues.append(f"LIVE_DB_NOT_FRESH:{table}:{count}")
 
