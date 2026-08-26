@@ -8,6 +8,7 @@ from pathlib import Path
 
 from jd_holdings.application.analysis_service import AnalysisService
 from jd_holdings.application.database import SQLiteRepository
+from jd_holdings.application.live_commissioning import LiveCommissioningPreflight
 from jd_holdings.backtest.runner import run_production_backtest, serialize_backtest_run
 from jd_holdings.config import load_config
 from jd_holdings.core.v322_allocation import V322Policy
@@ -33,6 +34,15 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--refresh", action="store_true")
     backtest.add_argument("--output", type=Path)
     subparsers.add_parser("toss-smoke", help="주문 없이 Toss 인증·시세·장상태만 조회")
+    live_preflight = subparsers.add_parser(
+        "live-preflight",
+        help="별도 신규 live DB와 실계좌의 최초기동 안전조건 점검",
+    )
+    live_preflight.add_argument(
+        "--arm-buy-halt",
+        action="store_true",
+        help="점검 통과 시 live DB를 BUY 긴급정지 상태로 시작",
+    )
     return parser
 
 
@@ -49,6 +59,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init-db":
         print(f"OK database={settings.database_path}")
         return 0
+
+    if args.command == "live-preflight":
+        preflight = LiveCommissioningPreflight(repository, TossClient())
+        result = preflight.run()
+        if result.safe and args.arm_buy_halt:
+            preflight.arm_buy_halt()
+        print(
+            json.dumps(
+                {
+                    "safe": result.safe,
+                    "issues": list(result.issues),
+                    "buying_power": (
+                        str(result.buying_power)
+                        if result.buying_power is not None
+                        else None
+                    ),
+                    "buy_halt_armed": bool(result.safe and args.arm_buy_halt),
+                    "database": str(settings.database_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0 if result.safe else 1
 
     data_source = YFinanceDataSource("data/cache")
     market_clock = MarketClock()

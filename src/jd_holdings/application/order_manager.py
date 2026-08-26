@@ -11,6 +11,7 @@ from jd_holdings.settings import RuntimeSettings
 from .broker import Broker
 from .database import ALL_ORDER_STATUSES, SQLiteRepository
 from .managed_account import reserve_buy_order_with_managed_cash
+from .operational_safety import BUY_EXECUTION_LOCK, OPERATOR_BUY_HALT_KEY
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ class OrderManager:
         self.repository = repository
         self.broker = broker
         self.settings = settings
+
+    def _buy_is_halted(self) -> bool:
+        return self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
 
     def submit(
         self,
@@ -90,7 +94,15 @@ class OrderManager:
                 else None,
             )
 
-        if request.side.upper() == "BUY":
+        is_buy = request.side.upper() == "BUY"
+        if is_buy and self._buy_is_halted():
+            raise RuntimeError("운영자 긴급정지 상태라 신규 BUY가 차단되어 있습니다")
+        if self.settings.trading_mode == "live":
+            # Fail before touching the order ledger. A missing/incorrect live
+            # confirmation must not leave a stranded CREATED order behind.
+            self.settings.require_live_trading()
+
+        if is_buy:
             if request.price is None:
                 raise RuntimeError("JDSS 매수는 관리현금 검증 가능한 지정가만 허용합니다")
             reserved = reserve_buy_order_with_managed_cash(
@@ -120,10 +132,24 @@ class OrderManager:
             )
         if not reserved:
             raise RuntimeError("주문 멱등키 예약에 실패했습니다")
-        if self.settings.trading_mode == "live":
-            self.settings.require_live_trading()
+
         try:
-            receipt = self.broker.place_order(request)
+            if is_buy:
+                # Serialize only the final risk-increasing broker boundary with
+                # /halt. SELLs remain available during an operator BUY halt.
+                with BUY_EXECUTION_LOCK:
+                    if self._buy_is_halted():
+                        self.repository.update_order(
+                            request.client_order_id,
+                            status="REJECTED",
+                            raw={"error": "OPERATOR_BUY_HALT"},
+                        )
+                        raise RuntimeError(
+                            "운영자 긴급정지가 활성화되어 BUY 제출을 중단했습니다"
+                        )
+                    receipt = self.broker.place_order(request)
+            else:
+                receipt = self.broker.place_order(request)
             self._validate_receipt(
                 receipt,
                 expected_client_order_id=request.client_order_id,
@@ -144,6 +170,9 @@ class OrderManager:
             )
             raise
         except Exception as exc:
+            local = self.repository.get_order_by_client_id(request.client_order_id)
+            if local is not None and str(local["status"]) == "REJECTED":
+                raise
             self.repository.update_order(
                 request.client_order_id,
                 status="UNKNOWN",
