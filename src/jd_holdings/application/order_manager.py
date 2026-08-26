@@ -97,6 +97,10 @@ class OrderManager:
         is_buy = request.side.upper() == "BUY"
         if is_buy and self._buy_is_halted():
             raise RuntimeError("운영자 긴급정지 상태라 신규 BUY가 차단되어 있습니다")
+        if self.settings.trading_mode == "live":
+            # Fail before touching the order ledger. A missing/incorrect live
+            # confirmation must not leave a stranded CREATED order behind.
+            self.settings.require_live_trading()
 
         if is_buy:
             if request.price is None:
@@ -128,8 +132,6 @@ class OrderManager:
             )
         if not reserved:
             raise RuntimeError("주문 멱등키 예약에 실패했습니다")
-        if self.settings.trading_mode == "live":
-            self.settings.require_live_trading()
 
         try:
             if is_buy:
