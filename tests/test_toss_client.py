@@ -71,23 +71,25 @@ class FakeSession:
         raise AssertionError((method, url, kwargs))
 
 
+def _limit_order(*, price: Decimal = Decimal("100.50")) -> OrderRequest:
+    return OrderRequest(
+        client_order_id="JDSS-TQQQ-E1-abc123",
+        symbol="TQQQ",
+        side="BUY",
+        order_type="LIMIT",
+        quantity=8,
+        price=price,
+        purpose="ENTRY_1",
+        signal_id=1,
+    )
+
+
 def test_current_official_order_schema_and_idempotency_key():
     session = FakeSession()
     client = TossClient(
         client_id="client", client_secret="secret", account_seq="1", session=session
     )
-    receipt = client.place_order(
-        OrderRequest(
-            client_order_id="JDSS-TQQQ-E1-abc123",
-            symbol="TQQQ",
-            side="BUY",
-            order_type="LIMIT",
-            quantity=8,
-            price=Decimal("100.50"),
-            purpose="ENTRY_1",
-            signal_id=1,
-        )
-    )
+    receipt = client.place_order(_limit_order())
     assert receipt.broker_order_id == "broker-1"
     order_call = session.requests[-1][2]
     assert order_call["json"]["clientOrderId"] == "JDSS-TQQQ-E1-abc123"
@@ -183,6 +185,31 @@ def test_order_boundary_rejects_invalid_values(field, value, message):
 
     with pytest.raises(ValueError, match=message):
         client.place_order(OrderRequest(**values))
+
+
+@pytest.mark.parametrize("price", [Decimal("100.001"), Decimal("0.12345")])
+def test_us_limit_price_rejects_precision_beyond_official_schema(price):
+    client = TossClient(
+        client_id="client",
+        client_secret="secret",
+        account_seq="1",
+        session=FakeSession(),
+    )
+
+    with pytest.raises(ValueError, match="지정가 자릿수"):
+        client.place_order(_limit_order(price=price))
+
+
+def test_us_limit_price_accepts_four_decimals_below_one_dollar():
+    session = FakeSession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    receipt = client.place_order(_limit_order(price=Decimal("0.1234")))
+
+    assert receipt.broker_order_id == "broker-1"
+    assert session.requests[-1][2]["json"]["price"] == "0.1234"
 
 
 def test_success_response_rejects_non_json_payload():
@@ -311,3 +338,130 @@ def test_auth_does_not_retry_nonretryable_credential_failure(monkeypatch):
     assert raised.value.status_code == 401
     assert session.auth_calls == 1
     assert sleeps == []
+
+
+def test_read_401_refreshes_token_and_replays_only_read_request():
+    class ReadRefreshSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.auth_calls = 0
+            self.price_calls = 0
+
+        def post(self, url, **kwargs):
+            self.auth_calls += 1
+            return FakeResponse({"access_token": f"token-{self.auth_calls}"})
+
+        def request(self, method, url, **kwargs):
+            if url.endswith("/api/v1/prices"):
+                self.price_calls += 1
+                if self.price_calls == 1:
+                    return FakeResponse(
+                        {"error": {"code": "expired-token", "message": "expired"}},
+                        status_code=401,
+                    )
+                return FakeResponse(
+                    {"result": [{"symbol": "TQQQ", "lastPrice": "100.25"}]}
+                )
+            return super().request(method, url, **kwargs)
+
+    session = ReadRefreshSession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    assert client.get_price("TQQQ") == Decimal("100.25")
+    assert session.auth_calls == 2
+    assert session.price_calls == 2
+
+
+def test_write_401_refreshes_token_but_never_replays_order_automatically():
+    class WriteRefreshSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.auth_calls = 0
+            self.order_calls = 0
+
+        def post(self, url, **kwargs):
+            self.auth_calls += 1
+            return FakeResponse({"access_token": f"token-{self.auth_calls}"})
+
+        def request(self, method, url, **kwargs):
+            if url.endswith("/api/v1/orders") and method == "POST":
+                self.order_calls += 1
+                if self.order_calls == 1:
+                    return FakeResponse(
+                        {"error": {"code": "expired-token", "message": "expired"}},
+                        status_code=401,
+                    )
+                return FakeResponse(
+                    {
+                        "result": {
+                            "orderId": "broker-after-explicit-retry",
+                            "clientOrderId": kwargs["json"]["clientOrderId"],
+                        }
+                    }
+                )
+            return super().request(method, url, **kwargs)
+
+    session = WriteRefreshSession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    with pytest.raises(TossApiError) as raised:
+        client.place_order(_limit_order())
+
+    assert raised.value.status_code == 401
+    assert session.auth_calls == 2
+    assert session.order_calls == 1
+
+    # A later explicit call may use the refreshed token; the first call itself was
+    # never replayed across the side-effecting broker boundary.
+    receipt = client.place_order(_limit_order())
+    assert receipt.broker_order_id == "broker-after-explicit-retry"
+    assert session.auth_calls == 2
+    assert session.order_calls == 2
+
+
+def test_cancel_requires_distinct_operation_order_id():
+    class CancelSession(FakeSession):
+        def request(self, method, url, **kwargs):
+            if url.endswith("/api/v1/orders/original/cancel") and method == "POST":
+                return FakeResponse({"result": {"orderId": "cancel-operation"}})
+            return super().request(method, url, **kwargs)
+
+    client = TossClient(
+        client_id="client",
+        client_secret="secret",
+        account_seq="1",
+        session=CancelSession(),
+    )
+
+    assert client.cancel_order("original") == "cancel-operation"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"result": {}},
+        {"result": {"orderId": "original"}},
+    ],
+)
+def test_cancel_malformed_success_is_treated_as_uncertain(payload):
+    class MalformedCancelSession(FakeSession):
+        def request(self, method, url, **kwargs):
+            if url.endswith("/api/v1/orders/original/cancel") and method == "POST":
+                return FakeResponse(payload)
+            return super().request(method, url, **kwargs)
+
+    client = TossClient(
+        client_id="client",
+        client_secret="secret",
+        account_seq="1",
+        session=MalformedCancelSession(),
+    )
+
+    with pytest.raises(TossApiError) as raised:
+        client.cancel_order("original")
+
+    assert raised.value.retryable
