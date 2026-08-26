@@ -29,7 +29,7 @@ PR #209를 통해 전략 수학이나 매매비중을 변경하지 않고 실거
 
 - 모든 신규 BUY의 최종 broker 경계에 운영자 긴급정지 게이트 추가
 - `/halt`와 BUY 제출을 동일 process lock으로 직렬화해 경합 시 신규 BUY fail-closed
-- `/halt` 시 활성 승인 폐기, 미체결 BUY 취소 시도, 불확실 주문은 임의 재주문하지 않고 운영자 확인 대상으로 유지
+- `/halt` 시 활성 BUY 승인 폐기, 미체결 BUY 취소 시도, 불확실 주문은 임의 재주문하지 않고 운영자 확인 대상으로 유지
 - SELL·OrderMonitor·reconciliation은 긴급정지 중에도 계속 허용
 - `/resume RESUME_BUYS`는 broker/DB reconciliation PASS와 미체결 BUY 0을 확인한 뒤에만 허용
 - 잘못된 live confirmation은 주문 원장 예약 전에 차단해 broker ID 없는 고아 주문이 남지 않도록 보강
@@ -50,7 +50,7 @@ PR #209를 통해 전략 수학이나 매매비중을 변경하지 않고 실거
 - pinned SSH trust PASS
 - 서비스 중지 후 SQLite 일관 snapshot 생성
 - release별 venv 설치 및 rollback-safe 전환 PASS
-- `jh_holdings_bot` active 확인
+- systemd runtime service active 확인
 - Toss read-only 인증·시세·시장일자 smoke PASS
 - 배포 후 별도 Runtime Verifier PASS
 - verifier 실행 당시 미국장 `closed` 확인 후 systemd 실제 재시작·복구 검증 PASS
