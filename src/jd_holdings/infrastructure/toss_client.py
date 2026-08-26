@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import threading
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -16,6 +17,7 @@ CLIENT_ORDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,36}$")
 SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 ORDER_SIDES = {"BUY", "SELL"}
 ORDER_TYPES = {"LIMIT", "MARKET"}
+AUTH_MAX_ATTEMPTS = 3
 
 
 class TossApiError(RuntimeError):
@@ -61,32 +63,82 @@ class TossClient:
         if not self.client_id or not self.client_secret:
             raise TossApiError("TOSS_APP_KEY/TOSS_APP_SECRET이 설정되지 않았습니다")
 
+    @staticmethod
+    def _auth_retry_delay(response: requests.Response | None, attempt: int) -> float:
+        if response is not None:
+            raw = response.headers.get("Retry-After")
+            if raw:
+                try:
+                    value = float(raw)
+                except ValueError:
+                    pass
+                else:
+                    if value >= 0:
+                        return min(max(value, 0.25), 5.0)
+        return min(float(attempt + 1), 3.0)
+
     def authenticate(self, *, force: bool = False) -> str:
+        """Acquire an OAuth token with bounded retries only at the auth boundary.
+
+        Token acquisition has no broker order side effect. Retry is therefore limited
+        to transient network/429/5xx failures (and a malformed successful auth payload)
+        and never turns an order API call into a blind order resubmission.
+        """
         self._validate_credentials()
         with self._token_lock:
             if self._access_token and not force:
                 return self._access_token
-            try:
-                response = self.session.post(
-                    f"{self.BASE_URL}/oauth2/token",
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    data={
-                        "grant_type": "client_credentials",
-                        "client_id": self.client_id,
-                        "client_secret": self.client_secret,
-                    },
-                    timeout=self.timeout,
+
+            last_error: TossApiError | None = None
+            for attempt in range(AUTH_MAX_ATTEMPTS):
+                response: requests.Response | None = None
+                try:
+                    response = self.session.post(
+                        f"{self.BASE_URL}/oauth2/token",
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        data={
+                            "grant_type": "client_credentials",
+                            "client_id": self.client_id,
+                            "client_secret": self.client_secret,
+                        },
+                        timeout=self.timeout,
+                    )
+                except requests.RequestException as exc:
+                    last_error = TossApiError(
+                        "토스 인증 요청 네트워크 오류",
+                        retryable=True,
+                    )
+                    if attempt + 1 >= AUTH_MAX_ATTEMPTS:
+                        raise last_error from exc
+                    time.sleep(self._auth_retry_delay(None, attempt))
+                    continue
+
+                if not response.ok:
+                    error = self._api_error(response)
+                    last_error = error
+                    if not error.retryable or attempt + 1 >= AUTH_MAX_ATTEMPTS:
+                        raise error
+                    time.sleep(self._auth_retry_delay(response, attempt))
+                    continue
+
+                payload = self._json_object(response, "토스 인증")
+                token = payload.get("access_token")
+                if token:
+                    self._access_token = str(token)
+                    return self._access_token
+
+                last_error = TossApiError(
+                    "토스 인증 응답에 access_token이 없습니다",
+                    status_code=response.status_code,
+                    retryable=True,
                 )
-            except requests.RequestException as exc:
-                raise TossApiError("토스 인증 요청 네트워크 오류", retryable=True) from exc
-            if not response.ok:
-                raise self._api_error(response)
-            payload = self._json_object(response, "토스 인증")
-            token = payload.get("access_token")
-            if not token:
-                raise TossApiError("토스 인증 응답에 access_token이 없습니다")
-            self._access_token = str(token)
-            return self._access_token
+                if attempt + 1 >= AUTH_MAX_ATTEMPTS:
+                    raise last_error
+                time.sleep(self._auth_retry_delay(response, attempt))
+
+            if last_error is None:
+                raise TossApiError("토스 인증 재시도 상태가 올바르지 않습니다")
+            raise last_error
 
     def _headers(self, *, require_account: bool) -> dict[str, str]:
         headers = {

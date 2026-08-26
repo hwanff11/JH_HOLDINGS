@@ -125,6 +125,17 @@ rollback() {
 }
 trap rollback ERR
 
+# Commissioning is a maintenance boundary. Stop the dry-run process before any
+# account-scoped OAuth/API checks so only one TossClient process can acquire/use a
+# token during the real-account preflight. Failure below restarts the backed-up
+# dry-run service through rollback().
+sudo systemctl stop "$service_name"
+if sudo systemctl is-active --quiet "$service_name"; then
+  echo "dry-run 서비스를 commission 전 정지하지 못했습니다." >&2
+  exit 1
+fi
+sleep 2
+
 # First-use preflight is read-only against Toss. It writes only to the temporary
 # candidate SQLite ledger and arms BUY halt after all checks pass.
 JDSS_TRADING_MODE=live \
@@ -147,9 +158,9 @@ assert values.get('live_commissioned') == '1', values
 assert values.get('operator_buy_halt') == '1', values
 PY
 
-# Only after the real-account preflight passes do we stop dry-run and switch the
-# isolated ledger. Up to this point no broker order-write API has been used.
-sudo systemctl stop "$service_name"
+# Only after the real-account preflight passes do we switch the isolated ledger.
+# The dry-run service remains stopped for all remaining broker read checks so no
+# second runtime client can compete for OAuth tokens during commissioning.
 mv "$candidate_db" "$live_db"
 chmod 600 "$live_db"
 sed -i '/^JDSS_TRADING_MODE=/d;/^JDSS_LIVE_CONFIRMATION=/d;/^JDSS_DB_PATH=/d' "$env_file"
@@ -164,8 +175,6 @@ sudo sed -i \
   "$service_unit"
 sudo grep -q "^Environment=JDSS_DB_PATH=$live_db$" "$service_unit"
 sudo systemctl daemon-reload
-sudo systemctl start "$service_name"
-sudo systemctl is-active --quiet "$service_name"
 
 set -a
 source "$env_file"
@@ -174,10 +183,17 @@ test "$JDSS_TRADING_MODE" = "live"
 test "$JDSS_LIVE_CONFIRMATION" = "ENABLE_JDSS_LIVE_ORDERS"
 test "$JDSS_DB_PATH" = "$live_db"
 
-# The live process itself re-arms BUY halt before constructing TossClient. The
-# release check is order-write-free: halt, open-order zero and reconciliation pass.
+# Validate the live ledger and broker state while the service is still stopped.
+# These commands are read-only at the broker boundary; no order-create/cancel API
+# is called. Keeping them before service start serializes Toss authentication.
 "$current_dir/.venv/bin/jdss" --config "$current_dir/strategy.yaml" live-release-check
+sleep 1
 "$current_dir/.venv/bin/jdss" --config "$current_dir/strategy.yaml" toss-smoke
+
+# Start LIVE-ARMED only after every read-only gate has passed. The live process
+# re-arms BUY halt before constructing its TossClient, so startup cannot inherit a
+# previously released BUY state.
+sudo systemctl start "$service_name"
 sudo systemctl is-active --quiet "$service_name"
 
 "$current_dir/.venv/bin/python" - "$live_db" <<'PY'
