@@ -162,6 +162,12 @@ class OrderRequest:
     purpose: str
     signal_id: int | None = None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.quantity, bool) or not isinstance(self.quantity, int):
+            raise ValueError("주문 수량은 소수점이 아닌 정수 주여야 합니다")
+        if self.quantity <= 0:
+            raise ValueError("주문 수량은 1주 이상이어야 합니다")
+
 
 @dataclass(frozen=True)
 class OrderReceipt:
