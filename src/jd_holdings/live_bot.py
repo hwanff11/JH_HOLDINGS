@@ -2,21 +2,19 @@ from __future__ import annotations
 
 import logging
 
-from jd_holdings.application.allocation_trading_service import AllocationTradingService
 from jd_holdings.application.analysis_service import AnalysisService
 from jd_holdings.application.database import SQLiteRepository
-from jd_holdings.application.initial_onboarding_portfolio import InitialOnboardingPortfolioService
 from jd_holdings.application.live_commissioning import arm_live_startup_buy_halt
+from jd_holdings.application.live_runtime_services import (
+    LiveAllocationTradingService,
+    LiveInitialOnboardingPortfolioService,
+)
 from jd_holdings.application.order_manager import OrderManager
 from jd_holdings.application.order_monitor import OrderMonitor
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
-from jd_holdings.bot import (
-    configure_logging,
-    notify_startup_account_preflight,
-    recover_unapplied_core_fills,
-)
+from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
@@ -55,11 +53,10 @@ def main() -> None:
     data_source = YFinanceDataSource(settings.cache_path)
     market_clock = MarketClock()
     broker = TossClient()
-    account_client = broker
     order_manager = OrderManager(repository, broker, settings)
     position_manager = PositionManager(config, repository, broker)
     tp_manager = TakeProfitManager(repository, broker, order_manager)
-    trading_service = AllocationTradingService(
+    trading_service = LiveAllocationTradingService(
         config,
         repository,
         broker,
@@ -77,7 +74,7 @@ def main() -> None:
         position_manager,
         tp_manager,
     )
-    portfolio_service = InitialOnboardingPortfolioService(
+    portfolio_service = LiveInitialOnboardingPortfolioService(
         config,
         repository,
         broker,
@@ -103,17 +100,12 @@ def main() -> None:
         reconciliation_service,
         data_source,
         market_clock,
-        account_client,
+        broker,
         None,
         portfolio_service,
     )
     if mismatches:
         app.notify_startup_reconciliation(mismatches)
-
-    # Reuse the existing warning formatter only for informational startup notices.
-    # Real-account holdings after commissioning are expected to be managed through
-    # reconciliation rather than rejected by the first-use empty-account preflight.
-    notify_startup_account_preflight(app, ())
     app.run()
 
 
