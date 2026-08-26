@@ -24,11 +24,27 @@ class AccountPreflightResult:
         return not self.issues
 
 
+def _lookup_failure(step: str, exc: Exception) -> str:
+    """Return a public-log-safe error fingerprint without account/balance data."""
+    parts = [f"REAL_ACCOUNT_{step}_FAILED", type(exc).__name__]
+    status_code = getattr(exc, "status_code", None)
+    code = getattr(exc, "code", None)
+    if status_code is not None:
+        parts.append(f"HTTP{status_code}")
+    if code:
+        normalized = "".join(ch for ch in str(code) if ch.isalnum() or ch in "-_./")
+        if normalized:
+            parts.append(normalized[:80])
+    return ":".join(parts)
+
+
 class RealAccountPreflight:
     """Read-only guard that keeps a real Toss account separate from the dry-run ledger.
 
     V3.2.2 starts from an empty set of managed tickers. Existing QQQ/TQQQ/SOXL
     holdings or open orders are never adopted into the JDSS ledger automatically.
+    Account discovery is checked first because Toss documents `GET /api/v1/accounts`
+    as the source of truth for `X-Tossinvest-Account: accountSeq`.
     """
 
     def __init__(self, repository: SQLiteRepository, account_client: Any) -> None:
@@ -37,31 +53,61 @@ class RealAccountPreflight:
 
     def run(self) -> AccountPreflightResult:
         checked_at = datetime.now(UTC)
+        issues: list[str] = []
+        accounts: list[dict[str, Any]] | None = None
+        holdings: list[dict[str, Any]] | None = None
+        open_orders: list[dict[str, Any]] | None = None
+        buying_power: Decimal | None = None
+
+        try:
+            accounts = self.account_client.get_accounts()
+        except Exception as exc:
+            issues.append(_lookup_failure("ACCOUNTS", exc))
+        else:
+            configured = str(getattr(self.account_client, "account_seq", "")).strip()
+            available = {
+                str(item.get("accountSeq", "")).strip()
+                for item in accounts
+                if item.get("accountSeq") is not None
+            }
+            if not configured or configured not in available:
+                issues.append("REAL_ACCOUNT_CONFIGURED_SEQ_NOT_FOUND")
+
         try:
             holdings = self.account_client.get_holdings()
-            open_orders = self.account_client.list_orders(status="OPEN")
-            buying_power = self.account_client.get_buying_power("USD")
-            issues = self._inspect(holdings, open_orders, buying_power)
         except Exception as exc:
-            issues = (f"REAL_ACCOUNT_LOOKUP_FAILED:{type(exc).__name__}",)
-            buying_power = None
+            issues.append(_lookup_failure("HOLDINGS", exc))
 
+        try:
+            open_orders = self.account_client.list_orders(status="OPEN")
+        except Exception as exc:
+            issues.append(_lookup_failure("OPEN_ORDERS", exc))
+
+        try:
+            buying_power = self.account_client.get_buying_power("USD")
+        except Exception as exc:
+            issues.append(_lookup_failure("BUYING_POWER", exc))
+
+        if holdings is not None and open_orders is not None and buying_power is not None:
+            issues.extend(self._inspect(holdings, open_orders, buying_power))
+
+        unique = tuple(dict.fromkeys(issues))
         self.repository.set_system_value(
             REAL_ACCOUNT_PREFLIGHT_SAFE_MODE_KEY,
-            "0" if not issues else "1",
+            "0" if not unique else "1",
         )
         self.repository.set_system_value(
             REAL_ACCOUNT_PREFLIGHT_AT_KEY,
             checked_at.isoformat(),
         )
-        if issues:
+        if unique:
             self.repository.log_event(
                 "SAFE_MODE",
                 "REAL_ACCOUNT_PREFLIGHT_FAILED",
-                ";".join(issues),
+                ";".join(unique),
                 context={"check": "read_only_empty_managed_symbols"},
             )
-        return AccountPreflightResult(checked_at, issues, buying_power)
+        return AccountPreflightResult(checked_at, unique, buying_power)
 
     @staticmethod
     def _inspect(
