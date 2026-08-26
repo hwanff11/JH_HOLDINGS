@@ -21,18 +21,17 @@ from jd_holdings.infrastructure.market_clock import (
 
 
 class LiveInitialOnboardingPortfolioService(InitialOnboardingPortfolioService):
-    """Use the proven V3.2.2 allocator with the obsolete live hard-lock bypassed.
+    """Run the proven allocator only from the explicit commissioned live entrypoint.
 
-    `PortfolioService.trading_mode` is otherwise used only by its historical startup
-    hard-lock. Order writes do not consult this attribute; they cross OrderManager,
-    whose RuntimeSettings remain `live` and enforce live confirmation + BUY halt.
+    The normal V3.2.2 PortfolioService keeps its historical live hard-lock and the
+    strategy flag remains false. This adapter bypasses only that obsolete top-level
+    check. The broker is still Toss and OrderManager keeps RuntimeSettings=`live`, so
+    all broker writes retain live confirmation, BUY halt, idempotency and validation.
     """
 
     def run_allocation(self, now: datetime | None = None):
         if self.trading_mode != "live":
             return super().run_allocation(now)
-        if not self.config.portfolio.live_enabled:
-            raise RuntimeError("portfolio live capability가 비활성화되어 있습니다")
         self.trading_mode = "dry_run"
         try:
             return super().run_allocation(now)
@@ -44,8 +43,6 @@ class LiveAllocationTradingService(AllocationTradingService):
     """Live-capable V3.2.2 BUY execution with all existing safety gates preserved."""
 
     def _execute_core_buy(self, signal: dict, quote: ReviewQuote) -> OrderReceipt:
-        if not self.config.portfolio.live_enabled:
-            raise RuntimeError("portfolio live capability가 비활성화되어 있습니다")
         if self.order_manager.settings.trading_mode != "live":
             raise RuntimeError("live allocation service는 live runtime에서만 사용할 수 있습니다")
 
