@@ -29,7 +29,7 @@ dev = [
 
 [project.scripts]
 jdss = "jd_holdings.cli:main"
-jdss-bot = "jd_holdings.bot:main"
+jdss-bot = "jd_holdings.runtime:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

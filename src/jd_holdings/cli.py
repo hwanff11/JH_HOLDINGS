@@ -8,7 +8,10 @@ from pathlib import Path
 
 from jd_holdings.application.analysis_service import AnalysisService
 from jd_holdings.application.database import SQLiteRepository
-from jd_holdings.application.live_commissioning import LiveCommissioningPreflight
+from jd_holdings.application.live_commissioning import (
+    LiveCommissioningPreflight,
+    LiveReleaseGate,
+)
 from jd_holdings.backtest.runner import run_production_backtest, serialize_backtest_run
 from jd_holdings.config import load_config
 from jd_holdings.core.v322_allocation import V322Policy
@@ -41,7 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     live_preflight.add_argument(
         "--arm-buy-halt",
         action="store_true",
-        help="점검 통과 시 live DB를 BUY 긴급정지 상태로 시작",
+        help="점검 통과 시 live DB를 commissioning 완료 + BUY 긴급정지 상태로 준비",
+    )
+    subparsers.add_parser(
+        "live-release-check",
+        help="live 재배포/재시작 전 BUY HALT·미체결 0·정합성 안전조건 점검",
     )
     return parser
 
@@ -75,7 +82,37 @@ def main(argv: list[str] | None = None) -> int:
                         if result.buying_power is not None
                         else None
                     ),
-                    "buy_halt_armed": bool(result.safe and args.arm_buy_halt),
+                    "commissioned_and_buy_halt_armed": bool(
+                        result.safe and args.arm_buy_halt
+                    ),
+                    "database": str(settings.database_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0 if result.safe else 1
+
+    if args.command == "live-release-check":
+        if not settings.live_trading_enabled:
+            print(
+                json.dumps(
+                    {
+                        "safe": False,
+                        "issues": ["LIVE_RELEASE_RUNTIME_NOT_EXPLICITLY_ARMED"],
+                        "database": str(settings.database_path),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        result = LiveReleaseGate(repository, TossClient()).run()
+        print(
+            json.dumps(
+                {
+                    "safe": result.safe,
+                    "issues": list(result.issues),
                     "database": str(settings.database_path),
                 },
                 ensure_ascii=False,
