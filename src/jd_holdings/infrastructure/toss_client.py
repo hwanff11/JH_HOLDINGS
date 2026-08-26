@@ -136,7 +136,8 @@ class TossClient:
                     raise last_error
                 time.sleep(self._auth_retry_delay(response, attempt))
 
-            assert last_error is not None
+            if last_error is None:
+                raise TossApiError("토스 인증 재시도 상태가 올바르지 않습니다")
             raise last_error
 
     def _headers(self, *, require_account: bool) -> dict[str, str]:
