@@ -24,11 +24,11 @@ from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
 from jd_holdings.config import load_config
-from jd_holdings.infrastructure.initial_onboarding_telegram import (
-    InitialOnboardingTelegramBotApp,
-)
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
+from jd_holdings.infrastructure.operational_safety_telegram import (
+    OperationalSafetyTelegramBotApp,
+)
 from jd_holdings.infrastructure.toss_client import TossClient
 from jd_holdings.settings import load_runtime_settings
 
@@ -260,7 +260,7 @@ def main() -> None:
     if mismatches:
         logging.getLogger(__name__).error("시작 정합성 검사 실패: %s", mismatches)
     analysis_service = AnalysisService(config, repository, data_source, market_clock)
-    app = InitialOnboardingTelegramBotApp(
+    app = OperationalSafetyTelegramBotApp(
         config,
         settings,
         repository,
