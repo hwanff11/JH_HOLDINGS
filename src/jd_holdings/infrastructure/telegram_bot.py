@@ -42,6 +42,36 @@ IDLE_CASH_COMMANDS = ("sgov",)
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 TELEGRAM_MESSAGE_LIMIT = 4096
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
+# Telegram callback alerts allow fewer characters than normal messages.
+OPERATOR_ERROR_LIMIT = 180
+
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(authorization|bearer|access[_ -]?token|refresh[_ -]?token|"
+    r"client[_ -]?secret|api[_ -]?key|password)\b"
+    r"(?:\s*[:=]\s*|\s+)([^\s,;]+)"
+)
+_URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w.])(?:/(?:home|root|workspace|tmp|etc)/[^\s<>]+|[A-Za-z]:\\[^\s<>]+)"
+)
+_LONG_NUMBER_RE = re.compile(r"(?<!\d)\d{8,16}(?!\d)")
+
+
+def _redact_operator_text(value: object) -> str:
+    """Remove credentials and infrastructure details from Telegram-visible text."""
+    text = " ".join(str(value).split())
+    text = _SENSITIVE_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[보호됨]", text)
+    text = _URL_RE.sub("[외부주소 생략]", text)
+    text = _ABSOLUTE_PATH_RE.sub("[서버경로 생략]", text)
+    text = _LONG_NUMBER_RE.sub("[식별번호 생략]", text)
+    if len(text) > OPERATOR_ERROR_LIMIT:
+        text = text[: OPERATOR_ERROR_LIMIT - 1].rstrip() + "…"
+    return text
+
+
+def _operator_error_summary(exc: BaseException) -> str:
+    """Return a bounded operator message while retaining full details in server logs."""
+    return _redact_operator_text(exc) or type(exc).__name__
 
 
 class BacktestCommandError(ValueError):
@@ -835,7 +865,10 @@ class TelegramBotApp:
             self._send("\n".join(lines))
         except Exception as exc:
             LOGGER.exception("계좌 조회 실패")
-            self._send(f"❌ 토스 계좌 조회 중 오류 발생:\n<code>{html.escape(str(exc))}</code>")
+            self._send(
+                "❌ 토스 계좌 조회 중 오류 발생:\n"
+                f"<code>{html.escape(_operator_error_summary(exc))}</code>"
+            )
 
     def _get_account_lines(self) -> list[str]:
         if self.account_client is None:
@@ -966,7 +999,10 @@ class TelegramBotApp:
                 self._send("\n".join(lines), markup=self._dashboard_markup())
             except Exception as exc:
                 LOGGER.exception("dashboard 실패")
-                self._send(f"❌ 대시보드 수집 실패:\n<code>{html.escape(str(exc))}</code>")
+                self._send(
+                    "❌ 대시보드 수집 실패:\n"
+                    f"<code>{html.escape(_operator_error_summary(exc))}</code>"
+                )
 
         @bot.message_handler(commands=["account", "acct", "balance"])
         def account(message):
@@ -996,7 +1032,8 @@ class TelegramBotApp:
             except Exception as exc:
                 LOGGER.exception("SGOV 유휴자금 조회 실패")
                 self._send(
-                    f"❌ SGOV 유휴자금 조회 중 오류 발생:\n<code>{html.escape(str(exc))}</code>"
+                    "❌ SGOV 유휴자금 조회 중 오류 발생:\n"
+                    f"<code>{html.escape(_operator_error_summary(exc))}</code>"
                 )
 
         @bot.message_handler(commands=["history", "h"])
@@ -1014,7 +1051,8 @@ class TelegramBotApp:
             except Exception as exc:
                 LOGGER.exception("history 실패")
                 self._send(
-                    f"❌ 점수 이력 조회 중 오류 발생:\n<code>{html.escape(str(exc))}</code>"
+                    "❌ 점수 이력 조회 중 오류 발생:\n"
+                    f"<code>{html.escape(_operator_error_summary(exc))}</code>"
                 )
 
         @bot.message_handler(commands=["score", "sc", "indicator", "i"])
@@ -1037,7 +1075,10 @@ class TelegramBotApp:
                 self.notify_new_signals(results)
             except Exception as exc:
                 LOGGER.exception("score 실패")
-                self._send(f"❌ 점수 계산 중 오류 발생:\n<code>{html.escape(str(exc))}</code>")
+                self._send(
+                    "❌ 점수 계산 중 오류 발생:\n"
+                    f"<code>{html.escape(_operator_error_summary(exc))}</code>"
+                )
 
         @bot.message_handler(commands=["signal", "sg"])
         def signal(message):
@@ -1076,7 +1117,8 @@ class TelegramBotApp:
             except Exception as exc:
                 LOGGER.exception("guide 실패")
                 self._send(
-                    f"❌ 가이드 출력 실패:\n<code>{html.escape(str(exc))}</code>",
+                    "❌ 가이드 출력 실패:\n"
+                    f"<code>{html.escape(_operator_error_summary(exc))}</code>",
                     chat_id=message.chat.id,
                 )
 
@@ -1112,7 +1154,8 @@ class TelegramBotApp:
             for event in events:
                 lines.append(
                     f"<code>[{event['severity']}] {event['created_at'][11:19]}</code>\n"
-                    f"<b>{html.escape(event['event_type'])}</b>: {html.escape(event['message'])}\n"
+                    f"<b>{html.escape(event['event_type'])}</b>: "
+                    f"{html.escape(_redact_operator_text(event['message']))}\n"
                 )
             self._send("\n".join(lines))
 
@@ -1131,7 +1174,7 @@ class TelegramBotApp:
                 )
             except BacktestCommandError as exc:
                 self._send(
-                    f"⚠️ <b>{html.escape(str(exc))}</b>\n\n"
+                    f"⚠️ <b>{html.escape(_operator_error_summary(exc))}</b>\n\n"
                     "💡 <b>사용 예시</b>\n"
                     "<code>/bt</code> — 최근 300거래일\n"
                     "<code>/bt 100</code> — 최근 100거래일\n"
@@ -1220,7 +1263,9 @@ class TelegramBotApp:
                 bot.answer_callback_query(call.id, answer)
             except Exception as exc:
                 LOGGER.exception("대시보드 세부 조회 실패")
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
 
         @bot.callback_query_handler(func=lambda call: call.data.startswith("rv|"))
         def review_callback(call):
@@ -1246,10 +1291,14 @@ class TelegramBotApp:
                     "체결과 달러 매수가능금액이 확인되면 최종 매수 승인 버튼을 자동으로 보내드립니다.",
                     markup=markup,
                 )
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
             except Exception as exc:
                 LOGGER.exception("매수 검토 실패")
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
             finally:
                 self._clear_callback_markup(call)
 
@@ -1270,10 +1319,14 @@ class TelegramBotApp:
                 )
                 bot.answer_callback_query(call.id, f"{mode_text}이 처리되었습니다.")
             except QuoteChangedError as exc:
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
             except Exception as exc:
                 LOGGER.exception("최종 주문 실행 실패")
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
             finally:
                 self._clear_callback_markup(call)
 
@@ -1292,7 +1345,9 @@ class TelegramBotApp:
                 else:
                     raise ValueError("지원하지 않는 취소 유형입니다.")
             except Exception as exc:
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
                 return
             finally:
                 self._clear_callback_markup(call)
@@ -1433,7 +1488,7 @@ class TelegramBotApp:
             LOGGER.exception("Telegram 백테스트 기간/데이터 실패")
             self._send(
                 "📅 <b>[백테스트 기간·데이터 오류]</b>\n\n"
-                f"{html.escape(str(exc))}\n\n"
+                f"{html.escape(_operator_error_summary(exc))}\n\n"
                 "<code>/bt</code> 또는 <code>/bt full</code>로 다시 시도해 보세요."
             )
             self._log_backtest_failure("DATA_OR_PERIOD", exc)

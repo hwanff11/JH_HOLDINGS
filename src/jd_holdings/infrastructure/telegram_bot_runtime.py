@@ -12,6 +12,7 @@ from .telegram_bot import (
     _daily_analysis_is_due,
     _format_idle_cash_event,
     _is_toss_order_maintenance_window,
+    _operator_error_summary,
 )
 from .telegram_bot_v322 import V322TelegramBotApp
 
@@ -324,7 +325,7 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
         try:
             self._send(
                 f"⚠️ <b>[JDSS {html.escape(title)}]</b>\n\n"
-                f"• 오류: <code>{html.escape(str(exc))}</code>\n"
+                f"• 오류: <code>{html.escape(_operator_error_summary(exc))}</code>\n"
                 "• 다른 안전 점검은 가능한 범위에서 계속 수행합니다.\n"
                 "• 같은 오류 알림은 10분 동안 반복 전송하지 않습니다.\n\n"
                 "💡 <code>/errors</code>에서 기록을 확인할 수 있습니다."

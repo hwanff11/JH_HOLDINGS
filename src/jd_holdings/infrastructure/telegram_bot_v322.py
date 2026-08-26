@@ -846,7 +846,7 @@ class V322TelegramBotApp(TelegramBotApp):
                 )
                 self._send(
                     "❌ 오늘 주문을 검토하지 못했습니다.\n"
-                    f"<code>{html.escape(str(exc))}</code>"
+                    f"<code>{html.escape(telegram_bot_module._operator_error_summary(exc))}</code>"
                 )
 
         @bot.callback_query_handler(func=lambda call: call.data.startswith("ops|"))
@@ -883,7 +883,11 @@ class V322TelegramBotApp(TelegramBotApp):
                 bot.answer_callback_query(call.id, answer)
             except Exception as exc:
                 telegram_bot_module.LOGGER.exception("운영 바로가기 조회 실패")
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id,
+                    telegram_bot_module._operator_error_summary(exc),
+                    show_alert=True,
+                )
 
         @bot.callback_query_handler(func=lambda call: call.data.startswith("batch|"))
         def batch_order_callback(call):
@@ -915,7 +919,11 @@ class V322TelegramBotApp(TelegramBotApp):
                     "일괄 주문 callback 처리 중 예외가 발생했습니다",
                     context={"exception": type(exc).__name__},
                 )
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id,
+                    telegram_bot_module._operator_error_summary(exc),
+                    show_alert=True,
+                )
             finally:
                 self._clear_callback_markup(call)
 

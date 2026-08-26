@@ -84,6 +84,7 @@ GitHub 연결 환경에서는 owner-only **Deploy Oracle Dry Run** ChatOps를 �
 최신 main 확인
   → release directory 준비
   → release-local .venv 설치
+  → requirements.lock 전이 의존성 제약 적용
   → config·focused deployment gate 검증
   → 기존 service/current/unit 상태 기록
   → service 정지

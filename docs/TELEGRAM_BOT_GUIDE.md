@@ -110,6 +110,7 @@ SELL이 `SUBMITTED`, `PARTIAL_FILLED`, `PENDING_CANCEL`, `PENDING_REPLACE`, `UNK
 5. `미체결 주문 보기`와 `/errors`에서 확인
 
 Telegram 결과 메시지가 전송되지 않더라도 batch 생성·차단·실행·부분실패 이벤트는 시스템 감사로그에 남깁니다.
+`/errors`와 오류 알림에는 운영 판단에 필요한 요약만 표시하며 credential, 외부 URL, 서버 절대경로와 장문 식별번호는 자동으로 가립니다. 원본 traceback은 접근 통제된 Oracle 로그에서 확인합니다.
 
 ## 8. 중복 클릭과 오래된 버튼
 
