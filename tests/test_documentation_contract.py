@@ -88,7 +88,7 @@ def test_mutable_runtime_status_has_single_source():
 
     assert "릴리즈·배포 SHA·Oracle 동기화 여부·live 잠금 상태" in readme
     assert "현재 브랜치·배포·다음 작업" in docs_readme
-    assert "활성 개발 브랜치, 최신 `main` SHA" in workflow
+    assert "branch와 마지막 commit" in workflow
     assert "## 현재 운영 기준" not in docs_readme
     assert "## 현재 활성 개발 브랜치" not in workflow
 
@@ -126,9 +126,9 @@ def test_one_page_report_and_guide_cover_required_plain_language_topics():
         "flowchart",
         "HWM75",
         "RS6M",
-        "2단계",
-        "대기 중인 코어 BUY",
-        "clientOrderId",
+        "일괄 검토",
+        "BUY 후보",
+        "approval",
         "64.29%",
     ):
         assert required in guide
