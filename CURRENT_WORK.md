@@ -8,7 +8,7 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - GitHub `main`: 보호 브랜치, PR + 필수 CI 경유
-- Oracle runtime 기능 revision: **`ac773c7a8c95783dc9e44bf6a115d86c924766d3`**
+- Oracle runtime 기능 revision: **`d00668456a644d5701d24cb35e88463ed6df85d9`**
 - Oracle 서비스: **active**
 - 운용 모드: **forced dry-run**
 - `portfolio.live_enabled`: **false**
@@ -19,6 +19,31 @@
 `main`에 runtime 영향이 없는 문서-only commit이 추가될 수 있으므로 GitHub HEAD와 Oracle 기능 revision이 항상 같은 문자열일 필요는 없습니다. **runtime 코드·설정이 달라졌는데 Oracle revision이 뒤처진 경우만 배포 불일치**로 봅니다.
 
 ## 2. 최근 완료
+
+### Telegram 아침 운용 브리핑 가독성 개선
+
+매일 아침 V3.2.2 내부 배분 이벤트를 그대로 여러 줄 발송하던 방식을 운영자가 바로 행동을 판단할 수 있는 **단일 브리핑**으로 통합해 production에 배포했습니다.
+
+기본 순서:
+
+```text
+오늘의 결론
+  → 현재 목표 비중
+  → 전략 판단
+  → 쉬운 설명
+  → 자금관리
+```
+
+주요 변경:
+
+- `매수 승인 필요 / 위험축소 진행 / 즉시 주문 없음`을 최상단에서 구분
+- QQQ / TQQQ / SOXL 목표비중을 종목별로 읽기 쉽게 표시
+- `RS6M`, `overlay`, `위험예산` 같은 내부 용어 대신 `반도체 상대강도`, `추가매수 판단`, `오늘 매수규모 계산 기준` 등 사용자 표현 우선
+- HWM75는 수익분의 75%만 다음 위험예산 증가에 반영하는 의미를 함께 설명
+- 전략 계산·주문 규칙·HWM75 수학·live 잠금은 변경하지 않음
+- 전용 포맷 테스트와 Telegram 운영 가이드 동기화 완료
+
+관련 변경은 PR #201로 `main`에 병합했고, Oracle forced dry-run에 **`d00668456a644d5701d24cb35e88463ed6df85d9`** revision을 배포했습니다.
 
 ### Telegram 오늘 주문 일괄 검토·순차 실행
 
@@ -35,14 +60,6 @@
 
 핵심 안전장치인 **SELL 우선, 최종 실행 직전 reconciliation, 합계 HWM75 재검사, 중복 batch 차단, 가격·수량 변경 시 재승인, 중간 실패 시 이후 BUY fail-closed 중단**이 반영되어 있습니다. 세부 계약은 공식 사양·Telegram 가이드·보안 기준이 소유합니다.
 
-### 문서 체계 고도화
-
-- 문서별 단일 책임과 독자별 읽기 경로를 명확히 정리
-- `CURRENT_WORK`를 긴 완료 일지에서 짧은 상태판으로 축소
-- 사용자용 용어와 내부 구현 용어를 분리
-- canonical 백테스트 수치와 일괄주문 설명을 현행화
-- 최근 QLD 연구에서 확인한 parameter neighborhood·paired block bootstrap·OOS 오염 경고를 연구 프로토콜에 반영
-
 ## 3. 기준 검증 상태
 
 현재 production V3.2.2는 다음 공통 게이트를 유지합니다.
@@ -54,6 +71,8 @@
 - pinned SSH trust·DB snapshot·rollback-safe release ✅
 - Toss read-only smoke ✅
 - live hard lock ✅
+
+아침 브리핑 변경 PR의 최종 CI에서 Quality Gate, Security, JDSS V3 Backtest가 모두 성공했고, 배포 전 focused deployment gate 28건과 config validation도 통과했습니다.
 
 최신 canonical 백테스트의 사람이 읽는 승인 기준은 [`docs/STRATEGY_GUIDE.md`](docs/STRATEGY_GUIDE.md)에 기록하고, 실행별 artifact와 로그는 GitHub Actions에 둡니다.
 
@@ -77,7 +96,8 @@ QLD/SSO 연구는 production과 분리된 Draft 연구 PR에서 관리합니다.
 
 ## 6. 다음 우선순위
 
-1. 현재 forced dry-run 환경에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패` 화면을 실제 운영 루틴으로 충분히 관찰
-2. 실제 Toss 계좌 적용을 검토할 때만 별도 preflight·migration·주문 어댑터 리허설 수행
-3. QLD SHADOW 후보는 새 데이터가 쌓이는 동안 production과 분리해 관찰하고 추가 조건을 쉽게 붙이지 않음
-4. live 전환은 별도 명시적 승인 전까지 진행하지 않음
+1. 다음 정상 일일 분석 시점에 새 아침 운용 브리핑이 실제 Telegram에서 의도한 순서·문구로 발송되는지 운영 관찰
+2. 현재 forced dry-run 환경에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패` 화면을 실제 운영 루틴으로 충분히 관찰
+3. 실제 Toss 계좌 적용을 검토할 때만 별도 preflight·migration·주문 어댑터 리허설 수행
+4. QLD SHADOW 후보는 새 데이터가 쌓이는 동안 production과 분리해 관찰하고 추가 조건을 쉽게 붙이지 않음
+5. live 전환은 별도 명시적 승인 전까지 진행하지 않음
