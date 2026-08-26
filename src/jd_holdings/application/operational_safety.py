@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ from .reconciliation import ReconciliationService
 
 OPERATOR_BUY_HALT_KEY = "operator_buy_halt"
 OPERATOR_BUY_HALT_AT_KEY = "operator_buy_halt_at"
+BUY_EXECUTION_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -27,9 +29,9 @@ class OperatorHaltResult:
 class OperatorSafetyService:
     """Operator-controlled fail-closed barrier for risk-increasing BUY orders.
 
-    The halt flag is intentionally independent from portfolio SAFE_MODE.  SAFE_MODE
+    The halt flag is intentionally independent from portfolio SAFE_MODE. SAFE_MODE
     protects against detected state corruption, while this flag is a manual circuit
-    breaker.  A halt blocks BUY at the final OrderManager boundary but leaves SELL,
+    breaker. A halt blocks BUY at the final OrderManager boundary but leaves SELL,
     order monitoring and reconciliation available for risk reduction and recovery.
     """
 
@@ -48,47 +50,49 @@ class OperatorSafetyService:
 
     def halt(self) -> OperatorHaltResult:
         halted_at = datetime.now(UTC)
-
-        # Set the barrier before touching broker state.  Even if cancellation fails,
-        # no later BUY may pass the OrderManager boundary while the flag is set.
-        self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
-        self.repository.set_system_value(
-            OPERATOR_BUY_HALT_AT_KEY, halted_at.isoformat()
-        )
-
-        canceled_approvals = 0
-        with self.repository.transaction() as connection:
-            cursor = connection.execute(
-                "UPDATE approvals SET status = 'CANCELED' WHERE status = 'ACTIVE'"
-            )
-            canceled_approvals = cursor.rowcount
-            connection.execute(
-                """
-                UPDATE cash_release_intents
-                SET status = 'CANCELED', updated_at = ?
-                WHERE status IN ('WAITING_SGOV_FILL', 'AWAITING_EXECUTION')
-                """,
-                (halted_at.isoformat(),),
-            )
-
         canceled: list[str] = []
         uncertain: list[str] = []
-        for order in self.repository.open_orders():
-            if str(order.get("side") or "").upper() != "BUY":
-                continue
-            client_order_id = str(order["client_order_id"])
-            broker_order_id = str(order.get("broker_order_id") or "")
-            if not broker_order_id:
-                uncertain.append(client_order_id)
-                continue
-            try:
-                self.broker.cancel_order(broker_order_id)
-            except Exception:
-                # Do not guess whether the cancellation reached the broker.  The
-                # normal monitor/reconciliation loop will determine final state.
-                uncertain.append(client_order_id)
-            else:
-                canceled.append(client_order_id)
+
+        # Serialize with OrderManager's final BUY submission section. If a BUY is
+        # already inside broker.place_order, halt waits for that call to settle and
+        # then attempts cancellation. Otherwise the flag is set before any new BUY
+        # can cross the broker boundary.
+        with BUY_EXECUTION_LOCK:
+            self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
+            self.repository.set_system_value(
+                OPERATOR_BUY_HALT_AT_KEY, halted_at.isoformat()
+            )
+
+            with self.repository.transaction() as connection:
+                cursor = connection.execute(
+                    "UPDATE approvals SET status = 'CANCELED' WHERE status = 'ACTIVE'"
+                )
+                canceled_approvals = cursor.rowcount
+                connection.execute(
+                    """
+                    UPDATE cash_release_intents
+                    SET status = 'CANCELED', updated_at = ?
+                    WHERE status IN ('WAITING_SGOV_FILL', 'AWAITING_EXECUTION')
+                    """,
+                    (halted_at.isoformat(),),
+                )
+
+            for order in self.repository.open_orders():
+                if str(order.get("side") or "").upper() != "BUY":
+                    continue
+                client_order_id = str(order["client_order_id"])
+                broker_order_id = str(order.get("broker_order_id") or "")
+                if not broker_order_id:
+                    uncertain.append(client_order_id)
+                    continue
+                try:
+                    self.broker.cancel_order(broker_order_id)
+                except Exception:
+                    # Do not guess whether the cancellation reached the broker. The
+                    # normal monitor/reconciliation loop will determine final state.
+                    uncertain.append(client_order_id)
+                else:
+                    canceled.append(client_order_id)
 
         self.repository.log_event(
             "SAFE_MODE",
@@ -127,7 +131,21 @@ class OperatorSafetyService:
                 "미체결 BUY 주문이 남아 있어 BUY 차단을 해제할 수 없습니다"
             )
 
-        self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
+        with BUY_EXECUTION_LOCK:
+            # Re-check under the same lock used by OrderManager so a new BUY cannot
+            # slip between the clean reconciliation and the flag transition.
+            if self.repository.open_orders():
+                open_buys = [
+                    order
+                    for order in self.repository.open_orders()
+                    if str(order.get("side") or "").upper() == "BUY"
+                ]
+                if open_buys:
+                    raise RuntimeError(
+                        "BUY 차단 해제 직전에 새 미체결 BUY가 확인되었습니다"
+                    )
+            self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
+
         self.repository.log_event(
             "INFO",
             "OPERATOR_BUY_RESUMED",
