@@ -11,10 +11,23 @@ from jd_holdings.application.database import SQLiteRepository
 
 
 class AccountClient:
-    def __init__(self, *, holdings=None, orders=None, buying_power="50000") -> None:
+    def __init__(
+        self,
+        *,
+        holdings=None,
+        orders=None,
+        buying_power="50000",
+        account_seq="1",
+        accounts=None,
+    ) -> None:
         self.holdings = holdings or []
         self.orders = orders or []
         self.buying_power = Decimal(buying_power)
+        self.account_seq = account_seq
+        self.accounts = accounts if accounts is not None else [{"accountSeq": int(account_seq)}]
+
+    def get_accounts(self):
+        return list(self.accounts)
 
     def get_holdings(self):
         return self.holdings
@@ -66,7 +79,17 @@ def test_real_account_preflight_blocks_managed_holdings_and_orders(tmp_path, con
     assert repository.recent_events(1)[0]["event_type"] == "REAL_ACCOUNT_PREFLIGHT_FAILED"
 
 
-def test_real_account_preflight_fails_closed_when_toss_is_unavailable(tmp_path, config):
+def test_real_account_preflight_rejects_unknown_configured_account(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "preflight.db", config)
+    client = AccountClient(account_seq="2", accounts=[{"accountSeq": 1}])
+
+    result = RealAccountPreflight(repository, client).run()
+
+    assert result.issues == ("REAL_ACCOUNT_CONFIGURED_SEQ_NOT_FOUND",)
+    assert repository.get_system_value(REAL_ACCOUNT_PREFLIGHT_SAFE_MODE_KEY) == "1"
+
+
+def test_real_account_preflight_fails_closed_with_step_specific_error(tmp_path, config):
     repository = SQLiteRepository(tmp_path / "preflight.db", config)
 
     class FailingClient(AccountClient):
@@ -75,5 +98,5 @@ def test_real_account_preflight_fails_closed_when_toss_is_unavailable(tmp_path, 
 
     result = RealAccountPreflight(repository, FailingClient()).run()
 
-    assert result.issues == ("REAL_ACCOUNT_LOOKUP_FAILED:TimeoutError",)
+    assert result.issues == ("REAL_ACCOUNT_HOLDINGS_FAILED:TimeoutError",)
     assert repository.get_system_value(REAL_ACCOUNT_PREFLIGHT_SAFE_MODE_KEY) == "1"

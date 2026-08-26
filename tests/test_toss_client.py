@@ -9,10 +9,11 @@ from jd_holdings.infrastructure.toss_client import TossApiError, TossClient
 
 
 class FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, headers=None):
         self.payload = payload
         self.status_code = status_code
         self.ok = 200 <= status_code < 300
+        self.headers = headers or {}
 
     def json(self):
         return self.payload
@@ -37,6 +38,16 @@ class FakeSession:
                     }
                 }
             )
+        if url.endswith("/api/v1/orders") and method == "GET":
+            return FakeResponse({"result": {"orders": []}})
+        if url.endswith("/api/v1/accounts"):
+            return FakeResponse(
+                {"result": [{"accountNo": "PRIVATE", "accountSeq": 1, "accountType": "BROKERAGE"}]}
+            )
+        if url.endswith("/api/v1/holdings"):
+            return FakeResponse({"result": {"items": []}})
+        if url.endswith("/api/v1/buying-power"):
+            return FakeResponse({"result": {"cashBuyingPower": "50000"}})
         if url.endswith("/api/v1/prices"):
             return FakeResponse({"result": [{"symbol": "TQQQ", "lastPrice": "100.25"}]})
         if url.endswith("/api/v1/orderbook"):
@@ -77,6 +88,32 @@ def test_current_official_order_schema_and_idempotency_key():
     assert client.get_orderbook("SGOV")["asks"][0]["price"] == "100.02"
 
 
+def test_official_account_discovery_is_source_for_account_scoped_reads():
+    session = FakeSession()
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=session
+    )
+
+    accounts = client.get_accounts()
+    assert accounts[0]["accountSeq"] == 1
+    assert client.get_holdings() == []
+    assert client.list_orders(status="OPEN") == []
+    assert client.get_buying_power("USD") == Decimal("50000")
+
+    account_scoped = [
+        request
+        for method, url, request in session.requests
+        if method == "GET"
+        and any(url.endswith(path) for path in ("/api/v1/holdings", "/api/v1/orders", "/api/v1/buying-power"))
+    ]
+    assert account_scoped
+    assert all(item["headers"]["X-Tossinvest-Account"] == "1" for item in account_scoped)
+    accounts_call = next(
+        request for method, url, request in session.requests if url.endswith("/api/v1/accounts")
+    )
+    assert "X-Tossinvest-Account" not in accounts_call["headers"]
+
+
 def test_market_order_omits_price_for_toss_api():
     session = FakeSession()
     client = TossClient(
@@ -96,7 +133,6 @@ def test_market_order_omits_price_for_toss_api():
     payload = session.requests[-1][2]["json"]
     assert payload["orderType"] == "MARKET"
     assert "price" not in payload
-
 
 
 @pytest.mark.parametrize(
@@ -149,3 +185,17 @@ def test_success_response_rejects_non_json_payload():
 
     with pytest.raises(TossApiError, match="JSON 형식"):
         client.get_price("TQQQ")
+
+
+def test_api_error_uses_response_header_request_id_fallback():
+    response = FakeResponse(
+        {"error": {"code": "account-not-found", "message": "not found"}},
+        status_code=404,
+        headers={"X-Request-Id": "request-123"},
+    )
+
+    error = TossClient._api_error(response)
+
+    assert error.status_code == 404
+    assert error.code == "account-not-found"
+    assert error.request_id == "request-123"

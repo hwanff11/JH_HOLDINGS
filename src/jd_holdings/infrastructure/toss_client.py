@@ -161,6 +161,12 @@ class TossClient:
             message = error.get("message") or error.get("error_description") or message
         except (ValueError, AttributeError):
             pass
+        if not request_id:
+            request_id = (
+                response.headers.get("X-Request-Id")
+                or response.headers.get("referenceId")
+                or response.headers.get("x-amz-cf-id")
+            )
         retryable = response.status_code in {408, 429, 500, 502, 503, 504}
         return TossApiError(
             message,
@@ -222,6 +228,14 @@ class TossClient:
                 break
             before = str(next_before)
         return candles[:count]
+
+    def get_accounts(self) -> list[dict[str, Any]]:
+        """Return active accounts; accountSeq is the source for account-scoped headers."""
+        payload = self._request("GET", "/api/v1/accounts")
+        result = payload.get("result", [])
+        if not isinstance(result, list):
+            raise TossApiError("토스 계좌 목록 응답 형식이 올바르지 않습니다")
+        return [dict(item) for item in result if isinstance(item, dict)]
 
     def get_holdings(self, symbol: str | None = None) -> list[dict[str, Any]]:
         params = {"symbol": symbol.upper()} if symbol else None
