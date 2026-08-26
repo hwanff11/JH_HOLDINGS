@@ -45,6 +45,17 @@ def test_live_commissioning_updates_installed_unit_not_default_template():
     assert 'sudo cp "$unit_backup" "$service_unit"' in script
 
 
+def test_live_commissioning_rollback_secret_copies_are_ephemeral():
+    script = (ROOT / "commission_live_armed.sh").read_text(encoding="utf-8")
+
+    assert 'env_backup="/tmp/jdss-env-before-live-armed-' in script
+    assert 'unit_backup="/tmp/${service_name}-before-live-armed-' in script
+    assert "shared/backups/env-before-live-armed" not in script
+    assert "cleanup_temp" in script
+    assert 'rm -f "$env_backup"' in script
+    assert 'sudo rm -f "$unit_backup"' in script
+
+
 def test_live_commissioning_workflow_is_owner_only_latest_main_and_test_gated():
     workflow = (ROOT / ".github/workflows/commission-oracle-live-armed.yml").read_text(
         encoding="utf-8"
