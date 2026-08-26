@@ -56,8 +56,8 @@ def test_document_lifecycle_uses_fixed_current_files_and_git_history():
     )
 
     assert "롤링 상태판" in agents
-    assert "현재판으로 제자리 갱신" in guide
-    assert "현행 파일명은 고정" in guide
+    assert "제자리 갱신" in guide
+    assert "파일명은 고정" in guide
     assert "append-only 역사 색인" in history
     assert "Git tag" in history
     assert not (ROOT / "docs/infra/DECISIONS.md").exists()
@@ -86,8 +86,8 @@ def test_mutable_runtime_status_has_single_source():
         encoding="utf-8"
     )
 
-    assert "현재 브랜치·Oracle 배포·검증 상태" in readme
-    assert "변동 상태 기록 원칙" in docs_readme
+    assert "릴리즈·배포 SHA·Oracle 동기화 여부·live 잠금 상태" in readme
+    assert "현재 브랜치·배포·다음 작업" in docs_readme
     assert "활성 개발 브랜치, 최신 `main` SHA" in workflow
     assert "## 현재 운영 기준" not in docs_readme
     assert "## 현재 활성 개발 브랜치" not in workflow
@@ -106,7 +106,7 @@ def test_history_preserves_representative_versions_and_rejected_candidate():
     for version in ("v1.1.2", "v2.2.2", "v3.0.0", "v3.2.2"):
         assert version in history
     assert "SEMIMONTHLY_BAND_H05" in history
-    assert "MONTHLY_H05" in history
+    assert "월간 코어 + 5% 부스터" in history
     assert "JDSS V3.2.2" in guide
 
 
@@ -114,7 +114,13 @@ def test_one_page_report_and_guide_cover_required_plain_language_topics():
     report = (ROOT / "docs/ONE_PAGE_REPORT.md").read_text(encoding="utf-8")
     guide = (ROOT / "docs/STRATEGY_GUIDE.md").read_text(encoding="utf-8")
 
-    for required in ("용어 미니 사전", "QQQ 비교", "거래 사이클", "SAFE_MODE", "64.29%"):
+    for required in (
+        "미니 용어사전",
+        "QQQ 단순보유 비교",
+        "실제 하루 주문 흐름",
+        "SAFE_MODE",
+        "백테스트는 미래수익을 보장하지 않습니다",
+    ):
         assert required in report
     for required in (
         "flowchart",
@@ -123,6 +129,7 @@ def test_one_page_report_and_guide_cover_required_plain_language_topics():
         "2단계",
         "대기 중인 코어 BUY",
         "clientOrderId",
+        "64.29%",
     ):
         assert required in guide
 
@@ -132,9 +139,9 @@ def test_onboarding_contract_lives_in_existing_current_documents():
     telegram = (ROOT / "docs/TELEGRAM_BOT_GUIDE.md").read_text(encoding="utf-8")
     docs_readme = (ROOT / "docs/README.md").read_text(encoding="utf-8")
 
-    assert "최초 실전 진입 3단계 계약" in spec
+    assert "최초진입 50% → 75% → 100%" in spec
     assert "50%" in spec and "75%" in spec and "100%" in spec
-    assert "오래된 버튼" in spec
+    assert "stale 버튼" in spec
     assert "/onboarding" in telegram
     assert "callback" in telegram
     assert not (ROOT / "docs/INITIAL_ONBOARDING.md").exists()
