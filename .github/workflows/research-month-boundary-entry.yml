@@ -45,7 +45,7 @@ jobs:
       - name: Run month-boundary research
         run: |
           mkdir -p reports
-          python scripts/research_month_boundary_entry.py \
+          python -m scripts.research_month_boundary_entry \
             --output-json reports/month-boundary-entry.json \
             --output-md reports/month-boundary-entry.md
       - name: Publish summary
