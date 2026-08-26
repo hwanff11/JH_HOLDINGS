@@ -15,6 +15,8 @@ LOGGER = logging.getLogger(__name__)
 CACHE_START_GRACE_DAYS = 180
 YFINANCE_DOWNLOAD_ATTEMPTS = 3
 YFINANCE_RETRY_BASE_SECONDS = 1.0
+YFINANCE_CURRENT_PRICE_ATTEMPTS = 3
+YFINANCE_CURRENT_PRICE_RETRY_BASE_SECONDS = 0.5
 
 
 class YFinanceDataSource:
@@ -122,14 +124,82 @@ class YFinanceDataSource:
         return normalized
 
     def current_price(self, symbol: str) -> tuple[pd.Timestamp, float]:
-        """Return the newest extended-hours one-minute price available from Yahoo."""
-        ticker = yf.Ticker(symbol.upper())
-        frame = ticker.history(period="1d", interval="1m", prepost=True, auto_adjust=True)
+        """Return the newest extended-hours one-minute price available from Yahoo.
+
+        Yahoo occasionally returns an empty intraday frame even for liquid US ETFs.
+        A single empty response must not abort the whole V3.2.2 allocation cycle, so
+        current-price reads use bounded retries and a second yfinance entry point.
+        Stale daily data is never substituted for an unavailable intraday quote.
+        """
+        symbol = symbol.upper()
+        last_error: Exception | None = None
+
+        for attempt in range(1, YFINANCE_CURRENT_PRICE_ATTEMPTS + 1):
+            try:
+                with self._lock:
+                    frame = yf.Ticker(symbol).history(
+                        period="1d",
+                        interval="1m",
+                        prepost=True,
+                        auto_adjust=True,
+                    )
+                quote = self._latest_close(frame)
+                if quote is not None:
+                    return quote
+                last_error = MarketDataError(
+                    f"yfinance Ticker.history 빈 현재가 응답: {symbol}"
+                )
+            except Exception as exc:  # pragma: no cover - provider/network failure
+                last_error = exc
+
+            try:
+                with self._lock:
+                    frame = yf.download(
+                        symbol,
+                        period="1d",
+                        interval="1m",
+                        prepost=True,
+                        auto_adjust=True,
+                        actions=False,
+                        progress=False,
+                        threads=False,
+                        multi_level_index=False,
+                    )
+                quote = self._latest_close(frame)
+                if quote is not None:
+                    LOGGER.warning(
+                        "%s 현재가는 Ticker.history 대신 yf.download 대체 경로를 사용했습니다",
+                        symbol,
+                    )
+                    return quote
+                last_error = MarketDataError(
+                    f"yfinance download 빈 현재가 응답: {symbol}"
+                )
+            except Exception as exc:  # pragma: no cover - provider/network failure
+                last_error = exc
+
+            if attempt < YFINANCE_CURRENT_PRICE_ATTEMPTS:
+                LOGGER.warning(
+                    "%s yfinance 현재가 조회 실패 (%d/%d), 재시도합니다: %s",
+                    symbol,
+                    attempt,
+                    YFINANCE_CURRENT_PRICE_ATTEMPTS,
+                    last_error,
+                )
+                time.sleep(
+                    YFINANCE_CURRENT_PRICE_RETRY_BASE_SECONDS
+                    * (2 ** (attempt - 1))
+                )
+
+        raise MarketDataError(f"yfinance 현재가 조회 실패: {symbol}") from last_error
+
+    @staticmethod
+    def _latest_close(frame: pd.DataFrame | None) -> tuple[pd.Timestamp, float] | None:
         if frame is None or frame.empty or "Close" not in frame.columns:
-            raise MarketDataError(f"yfinance 현재가 조회 실패: {symbol}")
+            return None
         valid = frame["Close"].dropna()
         if valid.empty:
-            raise MarketDataError(f"yfinance 현재가가 비어 있습니다: {symbol}")
+            return None
         return pd.Timestamp(valid.index[-1]), float(valid.iloc[-1])
 
     def _cache_path(self, symbol: str, start: str | date, end: str | date | None) -> Path | None:
