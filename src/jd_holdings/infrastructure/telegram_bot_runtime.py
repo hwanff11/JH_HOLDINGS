@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import time
 from datetime import UTC, datetime
 
@@ -15,6 +16,123 @@ from .telegram_bot import (
 from .telegram_bot_v322 import V322TelegramBotApp
 
 LOGGER = logging.getLogger(__name__)
+
+_ALLOCATION_EVENT_RE = re.compile(
+    r"^V3\.2\.2 배분 레버리지 (?P<leverage>[0-9.]+)x · "
+    r"RS6M (?P<rs>ON|OFF) · JDSS TQQQ (?P<tqqq>ON|OFF) / "
+    r"SOXL (?P<soxl>ON|OFF) · 목표 QQQ (?P<qqq>[0-9.]+)% / "
+    r"TQQQ (?P<tqqq_weight>[0-9.]+)% / SOXL (?P<soxl_weight>[0-9.]+)%$"
+)
+_CAPITAL_EVENT_RE = re.compile(
+    r"^HWM USD (?P<hwm>[0-9,.]+) · 위험예산 USD (?P<risk>[0-9,.]+) · "
+    r"완결종가 평가액 USD (?P<equity>[0-9,.]+)$"
+)
+
+
+def _leverage_label(value: float) -> str:
+    if value <= 0.5:
+        return "방어 단계"
+    if value <= 1.0:
+        return "기본 단계"
+    if value <= 1.25:
+        return "상승추세 단계"
+    return "강한 상승추세 단계"
+
+
+def _format_daily_portfolio_brief(
+    trade_date: str,
+    events: tuple[str, ...],
+    *,
+    has_buy_signals: bool,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Convert internal V3.2.2 allocation events into one operator-friendly brief."""
+    allocation_match = None
+    capital_match = None
+    remaining: list[str] = []
+
+    for event in events:
+        if allocation_match is None:
+            allocation_match = _ALLOCATION_EVENT_RE.fullmatch(event)
+            if allocation_match is not None:
+                continue
+        if capital_match is None:
+            capital_match = _CAPITAL_EVENT_RE.fullmatch(event)
+            if capital_match is not None:
+                continue
+        remaining.append(event)
+
+    if allocation_match is None:
+        return None, events
+
+    leverage = float(allocation_match.group("leverage"))
+    rs_active = allocation_match.group("rs") == "ON"
+    tqqq_active = allocation_match.group("tqqq") == "ON"
+    soxl_active = allocation_match.group("soxl") == "ON"
+
+    lines = [
+        f"🌅 <b>[JDSS 아침 운용 브리핑 · {html.escape(trade_date)}]</b>",
+        "",
+        "✅ <b>오늘 결론</b>",
+    ]
+    if has_buy_signals:
+        lines.extend(
+            [
+                "• 목표비중에 맞추기 위한 <b>매수 승인이 필요합니다.</b>",
+                "• 아래에 이어지는 <b>‘오늘 매수 검토 가능’</b>에서 한 번에 확인해 주세요.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "• 현재 즉시 승인할 신규 BUY는 없습니다.",
+                "• 주문 필요 여부는 <code>/today</code>에서 언제든 다시 확인할 수 있습니다.",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "🎯 <b>오늘의 목표 비중</b>",
+            f"• <b>QQQ</b>  <code>{float(allocation_match.group('qqq')):.1f}%</code>",
+            f"• <b>TQQQ</b> <code>{float(allocation_match.group('tqqq_weight')):.1f}%</code>",
+            f"• <b>SOXL</b> <code>{float(allocation_match.group('soxl_weight')):.1f}%</code>",
+            "",
+            "📈 <b>왜 이 비중인가요?</b>",
+            f"• 시장 노출 단계 : <code>{leverage:.2f}x</code> · {_leverage_label(leverage)}",
+            (
+                "• 반도체 상대강도 : ✅ 우위 · SOXL 기본 비중 사용"
+                if rs_active
+                else "• 반도체 상대강도 : ➖ 우위 아님 · SOXL 기본 비중 미사용"
+            ),
+            "• 추가매수 판단 : "
+            f"TQQQ {'✅ 켜짐' if tqqq_active else '➖ 꺼짐'} / "
+            f"SOXL {'✅ 켜짐' if soxl_active else '➖ 꺼짐'}",
+        ]
+    )
+
+    if capital_match is not None:
+        hwm = capital_match.group("hwm")
+        risk = capital_match.group("risk")
+        equity = capital_match.group("equity")
+        lines.extend(
+            [
+                "",
+                "💵 <b>운용 자금</b>",
+                f"• 오늘 매수규모 계산 기준 : <code>${risk}</code>",
+                f"• 최고 평가 기준(HWM) : <code>${hwm}</code>",
+                f"• 전일 완결종가 기준 평가액 : <code>${equity}</code>",
+                "• HWM75는 수익이 늘었을 때 <b>수익분의 75%만</b> 다음 투자 규모에 반영하는 안전장치입니다.",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "💡 <code>/today</code> = 실제 주문 필요 여부 · "
+            "<code>/portfolio</code> = 상세 보유/목표 확인",
+        ]
+    )
+    return "\n".join(lines), tuple(remaining)
 
 
 def _operator_text(text: str) -> str:
@@ -210,7 +328,14 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
                 try:
                     portfolio_run = self.portfolio_service.run_month_end()
                     if portfolio_run is not None:
-                        for event in portfolio_run.events:
+                        brief, remaining_events = _format_daily_portfolio_brief(
+                            portfolio_run.trade_date,
+                            portfolio_run.events,
+                            has_buy_signals=bool(portfolio_run.signals),
+                        )
+                        if brief is not None:
+                            self._send(brief)
+                        for event in remaining_events:
                             if portfolio_run.signals and "매수 승인 대기" in event:
                                 continue
                             self._send(f"📊 {html.escape(event)}")
