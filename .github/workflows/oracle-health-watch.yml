@@ -11,6 +11,9 @@ permissions:
   contents: read
   issues: write
 
+env:
+  GH_REPO: ${{ github.repository }}
+
 concurrency:
   group: oracle-jdss-health-watch
   cancel-in-progress: false
