@@ -33,14 +33,16 @@ def main() -> None:
     settings.require_live_trading()
 
     config = load_config(settings.config_path)
-    if not config.portfolio.enabled or not config.portfolio.live_enabled:
-        raise RuntimeError("strategy.yaml의 portfolio live capability가 활성화되지 않았습니다")
+    if not config.portfolio.enabled:
+        raise RuntimeError("V3.2.2 portfolio가 비활성화되어 있습니다")
 
     configure_logging(settings.log_path)
     repository = SQLiteRepository(settings.database_path, config)
 
-    # Every process start/restart re-arms BUY halt before a live broker is created.
-    # This ensures a previously resumed BUY state is never inherited across restarts.
+    # The legacy strategy flag remains false so the normal/default runtime can never
+    # drift into live. Only this explicitly commissioned entrypoint is allowed to use
+    # the real broker. Every process start/restart re-arms BUY halt before TossClient
+    # is constructed, so a previous Telegram resume is never inherited on restart.
     arm_live_startup_buy_halt(repository)
 
     recovered_core_fills = recover_unapplied_core_fills(repository)
