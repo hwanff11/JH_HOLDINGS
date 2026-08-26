@@ -1,0 +1,124 @@
+name: Commission Oracle Live Armed
+
+on:
+  workflow_dispatch:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-jdss-deploy
+  cancel-in-progress: false
+
+jobs:
+  commission:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+      github.actor == github.repository_owner &&
+      startsWith(github.event.issue.title, '[commission-oracle-live-armed]'))
+    runs-on: ubuntu-latest
+    # Reuse the existing Oracle credential scope. The workflow itself changes the
+    # runtime to live only after a fresh live-ledger preflight arms BUY HALT.
+    environment: oracle-dry-run
+    steps:
+      - name: Checkout exact latest main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify exact latest main
+        id: ref
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main --no-tags
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          git checkout -B main HEAD
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Run live commissioning gate tests
+        run: |
+          set -Eeuo pipefail
+          pip install --constraint requirements.lock -e '.[dev]'
+          python -m ruff check .
+          python -m pytest \
+            tests/test_live_commissioning.py \
+            tests/test_operational_safety.py \
+            tests/test_managed_account_safety.py \
+            tests/test_order_flow.py \
+            tests/test_deployment_contract.py
+          jdss validate-config
+          grep -q 'live_enabled: true' strategy.yaml
+          grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml
+          grep -q 'LIVE_STARTUP_BUY_HALT_ARMED' src/jd_holdings/application/live_commissioning.py
+          grep -q 'JDSS_LIVE_CONFIRMATION=ENABLE_JDSS_LIVE_ORDERS' commission_live_armed.sh
+
+      - name: Prepare pinned SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_jdss
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_jdss ~/.ssh/known_hosts
+
+      - name: Deploy latest main once in forced dry-run
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+          SYSTEMD_SERVICE: jh_holdings_bot
+          REMOTE_PYTHON_BIN: ${{ vars.ORACLE_PYTHON || 'python3.12' }}
+          SKIP_LOCAL_CHECKS: "1"
+        run: |
+          set -Eeuo pipefail
+          LOCAL_PYTHON="$(command -v python)" bash ./deploy.sh
+
+      - name: Commission fresh live ledger with BUY halted
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+          SYSTEMD_SERVICE: jh_holdings_bot
+        run: |
+          set -Eeuo pipefail
+          bash ./commission_live_armed.sh
+
+      - name: Report ChatOps commissioning result
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          DEPLOY_REF: ${{ steps.ref.outputs.ref }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$JOB_STATUS" == "success" ]]; then
+            message="✅ Oracle LIVE-ARMED 전환 성공: \`$DEPLOY_REF\`\n\n실계좌 연결·별도 신규 live DB·commissioning marker·BUY HALT·broker/DB reconciliation·Toss read-only smoke를 통과했습니다. 신규 BUY는 Telegram에서 명시적으로 해제하기 전까지 차단됩니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
+          else
+            message="❌ Oracle LIVE-ARMED 전환 실패: \`${DEPLOY_REF:-ref 확인 실패}\`\n\n실거래 BUY를 열지 않은 상태로 중단/복구하도록 설계되어 있습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
+          fi
+          gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$message")"
