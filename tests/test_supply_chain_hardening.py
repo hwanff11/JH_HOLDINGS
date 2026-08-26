@@ -11,11 +11,11 @@ def _normalize_pin(value: str) -> str:
     return f"{re.sub(r'[-_.]+', '-', name)}=={version}"
 
 
-def test_runtime_dependencies_exclude_unused_scientific_packages():
+def test_runtime_dependencies_keep_yfinance_requirement_only():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     dependencies = tuple(str(value).lower() for value in project["dependencies"])
 
-    assert not any(value.startswith("scipy") for value in dependencies)
+    assert "scipy==1.18.0" in dependencies
     assert not any(value.startswith("scikit-learn") for value in dependencies)
 
 

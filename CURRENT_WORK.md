@@ -24,7 +24,7 @@
 
 전략·주문 계산을 바꾸지 않는 범위에서 production 공급망과 운영 오류 노출 경계를 정리했습니다.
 
-- 사용하지 않는 `scipy`·`scikit-learn` runtime 의존성 제거
+- 사용하지 않는 `scikit-learn` runtime 의존성 제거 (`yfinance` 실행에 필요한 `scipy`는 유지)
 - `pyproject.toml`·`requirements.txt` 직접 의존성 동기화 테스트 추가
 - Python 3.12 production 전이 의존성을 `requirements.lock`으로 고정하고 CI·Oracle 설치에 동일 제약 적용
 - 외부 GitHub Actions를 검증한 40자리 commit SHA로 고정
