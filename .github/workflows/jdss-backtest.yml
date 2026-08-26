@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - name: Detect backtest-sensitive changes
@@ -74,7 +74,7 @@ jobs:
           fi
       - name: Set up Python
         if: steps.scope.outputs.run_backtest == 'true'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
           cache: pip
@@ -82,7 +82,7 @@ jobs:
         if: steps.scope.outputs.run_backtest == 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install --constraint requirements.lock -e .
       - name: Run backtest
         if: steps.scope.outputs.run_backtest == 'true'
         env:
@@ -171,7 +171,7 @@ jobs:
           PY
       - name: Upload detailed report archive
         if: steps.scope.outputs.run_backtest == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: jdss-backtest-${{ github.run_id }}
           path: reports/backtest.*
@@ -193,19 +193,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout latest main
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
       - name: Set up Python
         if: steps.scope.outputs.run_backtest == 'true'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
           cache: pip
       - name: Install package
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install --constraint requirements.lock -e .
       - name: Run initial-entry scenario sweep
         run: |
           set -Eeuo pipefail
@@ -217,7 +217,7 @@ jobs:
       - name: Publish summary
         run: cat reports/initial-entry-research.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload research report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: initial-entry-research-${{ github.run_id }}
           path: reports/initial-entry-research.*

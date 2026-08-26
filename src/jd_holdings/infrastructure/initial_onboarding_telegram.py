@@ -18,6 +18,7 @@ from jd_holdings.core.initial_onboarding import (
 )
 from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
 
+from .telegram_bot import _operator_error_summary
 from .telegram_bot_runtime import RuntimeTelegramBotApp
 
 LOGGER = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ class InitialOnboardingTelegramBotApp(RuntimeTelegramBotApp):
                 LOGGER.exception("최초진입 상태 조회 실패")
                 self._send(
                     "❌ 최초진입 상태를 확인하지 못했습니다.\n"
-                    f"<code>{html.escape(str(exc))}</code>"
+                    f"<code>{html.escape(_operator_error_summary(exc))}</code>"
                 )
 
         @bot.callback_query_handler(func=lambda call: call.data.startswith("onboard|"))
@@ -208,7 +209,9 @@ class InitialOnboardingTelegramBotApp(RuntimeTelegramBotApp):
                     self.notify_portfolio_buy_batch_ready(result.signals)
             except Exception as exc:
                 LOGGER.exception("최초진입 단계 처리 실패")
-                bot.answer_callback_query(call.id, str(exc), show_alert=True)
+                bot.answer_callback_query(
+                    call.id, _operator_error_summary(exc), show_alert=True
+                )
 
     def _send_onboarding_status(self) -> None:
         service = self.onboarding_service

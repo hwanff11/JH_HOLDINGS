@@ -19,7 +19,8 @@ def test_deploy_uses_release_local_venv_and_atomic_current_switch():
     script = (ROOT / "deploy.sh").read_text(encoding="utf-8")
     assert 'release_dir="$target_dir/releases/$commit_sha"' in script
     assert '"$remote_python" -m venv "$release_dir/.venv"' in script
-    assert '"$release_dir/.venv/bin/python" -m pip install "$release_dir"' in script
+    assert '"$release_dir/.venv/bin/python" -m pip install \\' in script
+    assert '--constraint "$release_dir/requirements.lock" "$release_dir"' in script
     assert 'ln -sfn "$release_dir" "$target_dir/current.new"' in script
     assert 'mv -Tf "$target_dir/current.new" "$target_dir/current"' in script
 
@@ -119,4 +120,3 @@ def test_runtime_verifier_automates_safe_closed_market_and_telegram_smoke():
     assert '"sendMessage"' in workflow
     assert '"deleteMessage"' in workflow
     assert "disable_notification" in workflow
-

@@ -44,6 +44,7 @@ Dry-run broker와 Toss OpenAPI는 서로 다른 경계입니다. 한쪽 성공�
 - Quality Gate와 Security Gate 필수
 - 전략·백테스트 민감 변경은 canonical Backtest 확인
 - Actions 기본 권한은 `contents: read`, 필요한 workflow만 최소 추가 권한
+- 외부 GitHub Action은 검증한 40자리 commit SHA로 고정하고 표시용 major 버전 주석만 병기
 - 문서-only 변경은 안전한 fast path를 사용하고 runtime을 불필요하게 재배포하지 않음
 
 branch protection이 비활성화되면 코드가 정상이어도 production 변경통제는 미완료로 봅니다.
@@ -56,6 +57,8 @@ branch protection이 비활성화되면 코드가 정상이어도 production 변
 - callback payload는 신뢰하지 않고 DB의 현재 상태와 대조
 - stale onboarding 단계·만료 approval·이미 사용된 token은 거부
 - 사용자 메시지에 secret·approval token을 노출하지 않음
+- Telegram에 표시하는 예외·감사로그 문구는 credential, URL, 서버 절대경로, 장문 식별번호를 정제하고 길이를 제한
+- 전체 traceback과 원본 예외는 Telegram이 아니라 접근 통제된 Oracle 로그에서만 확인
 
 ## 5. 위험증가 BUY 승인 불변식
 
@@ -235,6 +238,8 @@ SAFE_MODE는 단 한 번의 정상 조회만으로 자동 해제하지 않습니
 - CodeQL: code scanning
 - Gitleaks: 전체 Git history secret scan
 - Dependabot: Python·Actions 의존성 갱신
+- 사용하지 않는 runtime 의존성은 제거하고 `pyproject.toml`과 `requirements.txt`의 직접 의존성을 테스트로 동기화
+- Oracle과 CI 설치는 검토된 `requirements.lock` 전이 의존성 제약을 적용해 같은 commit의 설치 결과가 임의로 변하지 않게 함
 - coverage 하한: 안전경계 테스트가 조용히 사라지는 것 방지
 
 ## 20. live hard lock

@@ -162,7 +162,8 @@ mkdir -p "$release_dir"
 tar -xzf "$remote_archive" -C "$release_dir"
 "$remote_python" -m venv "$release_dir/.venv"
 "$release_dir/.venv/bin/python" -m pip install --upgrade pip
-"$release_dir/.venv/bin/python" -m pip install "$release_dir"
+"$release_dir/.venv/bin/python" -m pip install \
+  --constraint "$release_dir/requirements.lock" "$release_dir"
 "$release_dir/.venv/bin/jdss" --config "$release_dir/strategy.yaml" validate-config
 grep -q 'live_enabled: false' "$release_dir/strategy.yaml"
 

@@ -20,6 +20,20 @@
 
 ## 2. 최근 완료
 
+### 실거래 전 운영리스크 hardening
+
+전략·주문 계산을 바꾸지 않는 범위에서 production 공급망과 운영 오류 노출 경계를 정리했습니다.
+
+- 사용하지 않는 `scikit-learn` runtime 의존성 제거 (`yfinance` 실행에 필요한 `scipy`는 유지)
+- `pyproject.toml`·`requirements.txt` 직접 의존성 동기화 테스트 추가
+- Python 3.12 production 전이 의존성을 `requirements.lock`으로 고정하고 CI·Oracle 설치에 동일 제약 적용
+- 외부 GitHub Actions를 검증한 40자리 commit SHA로 고정
+- Telegram 오류·`/errors`에 credential, 외부 URL, 서버 절대경로, 장문 식별번호가 표시되지 않도록 정제
+- 오류 원문과 traceback은 접근 통제된 Oracle 로그에만 유지
+- 공급망 고정·오류 정제 회귀테스트 추가
+
+전략 ID, HWM75, 최초진입, 주문 승인, SAFE_MODE, reconciliation과 live 잠금 계약은 변경하지 않았습니다. Oracle에는 아직 이 hardening revision을 배포하지 않았으며 기존 forced dry-run runtime을 유지합니다.
+
 ### Telegram 아침 운용 브리핑 가독성 개선
 
 매일 아침 V3.2.2 내부 배분 이벤트를 그대로 여러 줄 발송하던 방식을 운영자가 바로 행동을 판단할 수 있는 **단일 브리핑**으로 통합해 production에 배포했습니다.
@@ -96,8 +110,9 @@ QLD/SSO 연구는 production과 분리된 Draft 연구 PR에서 관리합니다.
 
 ## 6. 다음 우선순위
 
-1. 다음 정상 일일 분석 시점에 새 아침 운용 브리핑이 실제 Telegram에서 의도한 순서·문구로 발송되는지 운영 관찰
-2. 현재 forced dry-run 환경에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패` 화면을 실제 운영 루틴으로 충분히 관찰
-3. 실제 Toss 계좌 적용을 검토할 때만 별도 preflight·migration·주문 어댑터 리허설 수행
-4. QLD SHADOW 후보는 새 데이터가 쌓이는 동안 production과 분리해 관찰하고 추가 조건을 쉽게 붙이지 않음
-5. live 전환은 별도 명시적 승인 전까지 진행하지 않음
+1. 실거래 전 hardening `main`을 승인된 절차로 Oracle forced dry-run에 배포하고 runtime verifier로 확인
+2. 다음 정상 일일 분석 시점에 새 아침 운용 브리핑이 실제 Telegram에서 의도한 순서·문구로 발송되는지 운영 관찰
+3. 현재 forced dry-run 환경에서 `주문 없음 / 다음 거래일 대기 / SELL 진행 / 다건 BUY / 부분실패` 화면을 실제 운영 루틴으로 충분히 관찰
+4. 실제 Toss 계좌 적용을 검토할 때만 별도 preflight·migration·주문 어댑터 리허설 수행
+5. QLD SHADOW 후보는 새 데이터가 쌓이는 동안 production과 분리해 관찰하고 추가 조건을 쉽게 붙이지 않음
+6. live 전환은 별도 명시적 승인 전까지 진행하지 않음
