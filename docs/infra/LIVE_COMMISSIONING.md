@@ -193,12 +193,18 @@ BUY 잠금이 풀려도 주문이 자동 발생하지 않습니다. 각 BUY는 �
 - BUY HALT가 OrderManager final broker boundary에서 재확인됨
 - DB order reservation 후 broker submit
 - `clientOrderId` 누락/불일치는 성공으로 간주하지 않음
+- Toss `clientOrderId`의 broker 멱등성만 믿고 자동 재전송하지 않으며, JDSS 자체 원장과 reconciliation을 장기 중복방지 기준으로 유지
 - timeout/429/5xx/식별 불능은 blind retry하지 않음
+- **401에서도 write POST를 자동 replay하지 않음**: 토큰은 갱신할 수 있지만 주문 생성/취소 요청 자체는 현재 호출에서 다시 보내지 않음
+- 401 이후 다시 주문하려면 새로운 운영자 실행 흐름에서 원장/신호 상태를 확인한 뒤 명시적으로 진행
+- GET/HEAD/OPTIONS 같은 read-only 요청만 401 토큰 갱신 뒤 제한적으로 자동 재요청 가능
+- 미국주식 LIMIT 가격은 broker adapter에서 공식 자릿수 규격을 검증: **$1 이상 소수 2자리, $1 미만 소수 4자리**
+- 주문취소 HTTP 성공 응답도 별도 cancellation operation `orderId`가 없거나 원주문 ID와 같으면 성공으로 확정하지 않음
 - 증명할 수 없는 결과는 `UNKNOWN`으로 유지하고 broker 조회 + reconciliation
 - 부분체결은 실제 체결분만 원장 반영
 - 잔여 BUY는 새로운 승인 필요
 
-실계좌 canary 주문은 자동으로 실행하지 않습니다.
+실계좌 canary 주문은 자동으로 실행하지 않습니다. 위 계약은 테스트·dry-run으로 먼저 검증하고, 실제 broker write-path의 최종 확인은 전용 청정계좌의 LIVE-ARMED 상태에서 별도 명시적 commissioning으로 수행합니다.
 
 ## 9. 배포 / rollback 원칙
 
