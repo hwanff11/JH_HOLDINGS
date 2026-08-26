@@ -34,6 +34,18 @@ def test_live_commissioning_is_fresh_db_first_and_buy_halt_first():
     assert "LIVE-ARMED commissioning 실패: dry-run 환경으로 복구" in script
 
 
+def test_live_commissioning_loads_toss_credentials_before_preflight():
+    script = (ROOT / "commission_live_armed.sh").read_text(encoding="utf-8")
+
+    first_env_source = script.index('source "$env_file"')
+    preflight = script.index("live-preflight --arm-buy-halt")
+    assert first_env_source < preflight
+    assert ': "${TOSS_APP_KEY:?Oracle .env에 TOSS_APP_KEY가 필요합니다}"' in script
+    assert ': "${TOSS_APP_SECRET:?Oracle .env에 TOSS_APP_SECRET가 필요합니다}"' in script
+    assert script.rfind("set -a", 0, first_env_source) != -1
+    assert script.find("set +a", first_env_source, preflight) != -1
+
+
 def test_live_commissioning_updates_installed_unit_not_default_template():
     script = (ROOT / "commission_live_armed.sh").read_text(encoding="utf-8")
     unit = (ROOT / "systemd/jh_holdings_bot.service.template").read_text(encoding="utf-8")

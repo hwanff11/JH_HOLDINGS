@@ -91,6 +91,16 @@ if [[ ! -x "$current_dir/.venv/bin/jdss" || ! -x "$current_dir/.venv/bin/jdss-bo
 fi
 grep -q 'live_enabled: false' "$current_dir/strategy.yaml"
 
+# The SSH shell does not inherit the systemd process environment. Load the
+# protected Oracle .env before invoking the standalone live-preflight CLI so its
+# TossClient receives the same credentials/account selection as the runtime.
+# Values are never echoed; only presence is validated.
+set -a
+source "$env_file"
+set +a
+: "${TOSS_APP_KEY:?Oracle .env에 TOSS_APP_KEY가 필요합니다}"
+: "${TOSS_APP_SECRET:?Oracle .env에 TOSS_APP_SECRET가 필요합니다}"
+
 mkdir -p "$shared_dir/data"
 rm -f "$candidate_db" "${candidate_db}-wal" "${candidate_db}-shm"
 cleanup_temp
