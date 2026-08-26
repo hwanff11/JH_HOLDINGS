@@ -20,6 +20,7 @@
 6. broker side effect 가능 이후에는 과거 DB snapshot을 맹목적으로 복원하지 않는다.
 7. 배포 승인과 BUY 잠금 해제 승인은 서로 다른 행위다.
 8. 최초 commissioning은 **JDSS 전용 청정 실계좌**에서만 수행한다. 기존 개인 QQQ/TQQQ/SOXL 보유분을 자동 입양하거나 같은 계좌에서 공존시키지 않는다.
+9. **취소 요청 접수는 원주문 취소 완료가 아니다.** 원래 broker `orderId`의 상태가 `CANCELED`로 확인되기 전에는 취소 결과를 확정하지 않는다.
 
 ## 3. 최초 LIVE-ARMED 전환 게이트
 
@@ -154,10 +155,16 @@ SELL / monitor / reconciliation = 계속 가능
 - 신규 BUY final broker boundary 차단
 - 활성 BUY 승인 취소
 - 미체결 BUY 취소 시도
-- 취소 결과 불명확 주문은 임의 재주문하지 않음
+- **취소 API 요청 성공만으로 취소 완료로 간주하지 않음**
+- 취소 요청 후 원래 broker `orderId`를 다시 조회
+- 동일 원주문이 `CANCELED`일 때만 취소 완료로 확정
+- `PENDING_CANCEL`, 취소 중 동시체결, 조회 실패, 다른 `orderId` 응답은 모두 불확실 상태로 유지
+- 취소 결과 불명확 주문은 임의 재주문·역매매하지 않고 OrderMonitor + reconciliation으로 최종상태 확인
 - SELL 허용
 - OrderMonitor 허용
 - reconciliation 허용
+
+따라서 `/halt` 응답의 `uncertain_order_ids`가 비어 있지 않으면 긴급 BUY 차단 자체는 활성화되어 있어도 기존 주문의 정리가 끝난 것으로 보지 않습니다. 실제 broker 주문 상태가 증명될 때까지 BUY를 재개하지 않습니다.
 
 ### BUY 재개
 
@@ -200,7 +207,8 @@ BUY 잠금이 풀려도 주문이 자동 발생하지 않습니다. 각 BUY는 �
 - GET/HEAD/OPTIONS 같은 read-only 요청만 401 토큰 갱신 뒤 제한적으로 자동 재요청 가능
 - 미국주식 LIMIT 가격은 broker adapter에서 공식 자릿수 규격을 검증: **$1 이상 소수 2자리, $1 미만 소수 4자리**
 - 주문취소 HTTP 성공 응답도 별도 cancellation operation `orderId`가 없거나 원주문 ID와 같으면 성공으로 확정하지 않음
-- 증명할 수 없는 결과는 `UNKNOWN`으로 유지하고 broker 조회 + reconciliation
+- cancellation operation이 정상 접수됐더라도 **원주문의 동일 broker `orderId`를 재조회해 `CANCELED`를 확인하기 전에는 취소 완료로 확정하지 않음**
+- 증명할 수 없는 결과는 `UNKNOWN`/uncertain으로 유지하고 broker 조회 + reconciliation
 - 부분체결은 실제 체결분만 원장 반영
 - 잔여 BUY는 새로운 승인 필요
 
@@ -254,6 +262,15 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 5. 실제 체결분만 반영
 6. 상태 증명 후 필요 시 수동 재개
 
+### 취소 요청 결과가 불명확한 BUY
+
+1. BUY HALT 유지
+2. 같은 취소 요청이나 원주문을 blind retry하지 않음
+3. 원래 broker `orderId` 상태 재조회
+4. `PENDING_CANCEL`이면 monitor/reconciliation으로 최종상태 추적
+5. `FILLED`/부분체결이면 실제 체결분부터 원장에 반영
+6. `CANCELED`와 broker↔DB 정합성이 증명된 뒤에만 재개 검토
+
 ### 부분체결 BUY
 
 - 체결분만 반영
@@ -300,6 +317,7 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 - live DB 경로 확인
 - `live_commissioned=1`
 - `operator_buy_halt=1`
+- `/halt` 이후 uncertain cancellation 0 또는 broker 상태 증명 완료
 - broker holdings/open orders 조회 PASS
 - reconciliation PASS
 - Telegram `/ping`, `/dashboard`, `/account`, `/order` 확인
