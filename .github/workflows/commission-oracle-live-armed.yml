@@ -21,9 +21,6 @@ jobs:
       github.actor == github.repository_owner &&
       startsWith(github.event.issue.title, '[commission-oracle-live-armed]'))
     runs-on: ubuntu-latest
-    # Reuse the existing Oracle credential scope. The workflow changes runtime mode
-    # only after a fresh live-ledger preflight arms BUY HALT. The legacy strategy
-    # live_enabled flag intentionally remains false as an independent default lock.
     environment: oracle-dry-run
     steps:
       - name: Checkout exact latest main
@@ -60,7 +57,8 @@ jobs:
             tests/test_managed_account_safety.py \
             tests/test_order_flow.py \
             tests/test_deployment_contract.py \
-            tests/test_live_deployment_contract.py
+            tests/test_live_deployment_contract.py \
+            tests/test_toss_client.py
           jdss validate-config
           grep -q 'live_enabled: false' strategy.yaml
           grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml
@@ -96,6 +94,27 @@ jobs:
           set -Eeuo pipefail
           LOCAL_PYTHON="$(command -v python)" bash ./deploy.sh
 
+      - name: Verify Toss account APIs read-only
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" "$SERVER_USER@$SERVER_HOST" \
+            "TARGET_DIR='$SERVER_TARGET_DIR' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          current="$(readlink -f "$TARGET_DIR/current")"
+          env_file="$TARGET_DIR/shared/.env"
+          set -a
+          source "$env_file"
+          set +a
+          "$current/.venv/bin/jdss" --config "$current/strategy.yaml" toss-account-smoke
+          REMOTE
+
       - name: Commission fresh live ledger with BUY halted
         env:
           SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
@@ -123,6 +142,6 @@ jobs:
           if [[ "$JOB_STATUS" == "success" ]]; then
             message="✅ Oracle LIVE-ARMED 전환 성공: \`$DEPLOY_REF\`\n\n실계좌 연결·별도 신규 live DB·commissioning marker·BUY HALT·broker/DB reconciliation·Toss read-only smoke를 통과했습니다. 신규 BUY는 Telegram에서 명시적으로 해제하기 전까지 차단됩니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
           else
-            message="❌ Oracle LIVE-ARMED 전환 실패: \`${DEPLOY_REF:-ref 확인 실패}\`\n\n실거래 BUY를 열지 않은 상태로 중단/복구하도록 설계되어 있습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
+            message="❌ Oracle LIVE-ARMED 전환 실패: \`${DEPLOY_REF:-ref 확인 실패}\`\n\n실거래 BUY를 열지 않은 상태로 중단/복구하도록 설계되어 있습니다. 계좌번호·잔고·보유종목은 Actions 로그에 출력하지 않습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
           fi
           gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$message")"
