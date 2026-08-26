@@ -8,12 +8,12 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - GitHub `main`: 보호 브랜치, PR + 필수 CI 경유
-- 최신 runtime 기능 revision: **`b4e4dd511eaabadad9b8a0aa7b12c9e7fcb8cedb`**
-- Oracle runtime 기능 revision: **`b4e4dd511eaabadad9b8a0aa7b12c9e7fcb8cedb`**
+- 최신 runtime 기능 revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
+- Oracle runtime 기능 revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
 - Oracle 서비스: **active**
 - 현재 운용 모드: **forced dry-run**
 - `portfolio.live_enabled`: **false**
-- 실제 Toss 주문: **LOCKED / 미활성화**
+- 실제 Toss 주문: **LOCKED / 미활성화 / 0건**
 - SGOV 자동운용: **OFF**
 - 운영자 긴급 BUY 차단: **`/halt` 지원**
 - BUY 재개: **reconciliation PASS + 미체결 BUY 0 + 운영자 명시적 `/resume`**
@@ -23,54 +23,68 @@ runtime 영향이 없는 문서·CI·운영 workflow commit이 `main`에 추가�
 
 ## 2. 최근 완료
 
-### Toss / live commissioning hardening
+### Toss write-path no-replay hardening
 
-실거래 진입 직전의 인증·주문식별·commissioning 경계를 다음과 같이 보강했습니다.
+PR #231에서 Toss broker adapter의 실거래 write 경계를 공식 OpenAPI 계약에 맞춰 추가 보강했습니다.
 
-- 주문 생성 응답의 `clientOrderId` 누락/불일치를 성공으로 간주하지 않고 `UNKNOWN` + reconciliation 우선
-- Toss 인증 요청은 commissioning 중 직렬화하고 인증에 한해서만 제한적 재시도
-- 실제 주문 POST는 timeout/429/5xx라도 blind retry하지 않음
-- standalone `live-preflight` 실행 전에 Oracle의 protected `shared/.env`를 로드하도록 수정
-- secret 값은 공개 Actions 로그에 출력하지 않음
-- dry-run DB를 live DB로 승격하지 않고 **fresh 별도 live DB**만 허용
-- live 프로세스 시작/재시작 시 BUY HALT 자동 재설정
+- 401 응답 시 OAuth 토큰은 갱신하되 **GET/HEAD/OPTIONS read-only 요청만 자동 재요청**
+- 주문 생성/취소 **POST는 401이어도 자동 재전송하지 않음**
+- timeout/429/5xx/네트워크 불확실성은 기존대로 `UNKNOWN`/reconciliation 우선, blind retry 없음
+- force auth refresh 실패 시 거부된 cached token을 남기지 않음
+- 미국주식 LIMIT 가격을 broker 경계에서 검증: **$1 이상 소수 2자리, $1 미만 소수 4자리**
+- 주문취소 성공 응답은 **별도 operation `orderId`가 존재하고 원주문 ID와 달라야 함**
+- malformed cancellation success는 성공으로 간주하지 않고 불확실 상태로 처리
+- V3.2.2 전략/배분/HWM75/50→75→100 최초진입/BUY 승인 로직은 변경 없음
 
-관련 merge:
+PR #231 CI:
 
-- PR #225 `Serialize Toss auth during live commissioning` → `9befeb0fc65b511233b3c658f7fa9bcae912b7c8`
-- PR #227 `Load Toss credentials for standalone live preflight` → `b4e4dd511eaabadad9b8a0aa7b12c9e7fcb8cedb`
+- Quality Gate ✅
+- Security Gate ✅
+- canonical Backtest ✅
 
-### 실제 계좌 read-only commissioning 검증
+merge/runtime revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
 
-owner-only LIVE-ARMED commissioning을 최신 runtime revision으로 실제 실행했습니다.
+### Oracle forced dry-run 배포 및 독립 검증
 
-- live commissioning gate: Ruff + 집중테스트 **77건 PASS**
+PR #231 merge revision을 Oracle에 forced dry-run으로 배포했습니다.
+
+배포 run **32951632082**:
+
+- exact latest main 확인 PASS
+- focused deployment gate PASS
 - pinned SSH trust PASS
-- 최신 main의 forced dry-run Oracle 배포 PASS
+- release별 venv PASS
+- SQLite snapshot / rollback-safe 전환 PASS
+- live 잠금 유지 PASS
+- Toss read-only smoke PASS
+- exact deployed SHA `163cfd9...` 확인
+
+Runtime Verifier run **32951883450**:
+
+- focused V3.2.2 runtime safety tests PASS
+- pinned SSH PASS
+- Oracle runtime mode `dry_run` 확인
+- phase `pre_market` 확인
+- deployed SHA / runtime contract PASS
+- Telegram outbound runtime PASS
+- 재시작 검증은 당시 안전조건에 따라 **skipped**
+- verifier 전체 결론 **PASS**
+
+실계좌 LIVE-ARMED commissioning이나 실제 주문/canary는 수행하지 않았습니다.
+
+### 실계좌 read-only commissioning 검증
+
+이전 owner-only LIVE-ARMED commissioning run **32948894181**에서 다음까지 실제 검증했습니다.
+
+- live commissioning gate: Ruff + 집중테스트 77건 PASS
+- pinned SSH trust PASS
 - Toss 인증/시세 smoke PASS
-- Toss 계좌 목록·보유·미체결·USD buying power **read-only API PASS**
-- standalone `live-preflight`의 Oracle `.env` 로딩 PASS
-- 계좌정보·잔고금액은 공개 로그에서 비공개 유지
-- 실제 주문/canary **0건**
+- Toss 계좌 목록·보유·미체결·USD buying power read-only API PASS
+- standalone `live-preflight`의 Oracle protected `.env` 로딩 PASS
+- 계좌정보·잔고금액 공개 로그 비노출
+- 실제 주문/canary 0건
 
-commissioning run **32948894181**은 현재 실계좌에 관리대상 종목 **SOXL 기존 보유가 존재**하여 `REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:SOXL`로 **의도대로 fail-closed** 중단됐습니다. live 원장은 활성화되지 않았고 BUY 잠금도 해제되지 않았습니다.
-
-### 실패 후 dry-run 복구 독립 검증
-
-commissioning 중단 뒤 Oracle이 안전한 기존 상태로 돌아왔는지 외부 Health Watch를 별도로 실행했습니다.
-
-- SSH / pinned trust PASS
-- systemd PASS
-- SQLite quick check PASS
-- clock / disk PASS
-- strategy/config PASS
-- Toss read-only PASS
-- on-demand trigger Issue 자동 PASS comment + close PASS
-
-health run: **32950205268**  
-trigger Issue: **#229**
-
-현재 Oracle은 정상 **forced dry-run** 상태입니다.
+최종 preflight는 당시 실계좌의 기존 **SOXL 보유**를 감지해 `REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:SOXL`로 의도대로 fail-closed 중단했습니다. 이후 외부 Health Watch run **32950205268**로 Oracle이 정상 forced dry-run에 복구된 것을 독립 확인했습니다.
 
 ## 3. 실거래 계좌 운영 계약
 
@@ -86,23 +100,20 @@ trigger Issue: **#229**
 
 이어야 합니다.
 
-현재 다른 목적으로 보유한 관리대상 종목은 실제 운용 전에 **다른 증권계좌로 이동**하고, JDSS 계좌에서는 기존 개인 보유분과 JDSS 관리분을 공존시키지 않는 것을 production 원칙으로 합니다.
+기존 개인 보유분은 실제 운용 전에 **다른 증권계좌로 이동**하고 JDSS 계좌에서는 개인 보유분과 JDSS 관리분을 공존시키지 않습니다. `feat/live-external-holdings-baseline`의 공존 기능은 production에 병합하지 않습니다.
 
-이에 따라 `feat/live-external-holdings-baseline`에서 연구한 **기존 보유분 baseline 공존 기능은 production에 병합하지 않습니다.** 전용계좌 방식이 회계·자동 SELL·reconciliation 경계를 더 단순하고 안전하게 유지합니다.
-
-commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 수동으로 별도 매매하지 않습니다. broker↔DB 수량이 달라지면 신규 BUY보다 SAFE_MODE/reconciliation을 우선합니다.
+commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 수동 매매하지 않습니다. broker↔DB 수량이 달라지면 신규 BUY보다 SAFE_MODE/reconciliation을 우선합니다.
 
 ## 4. 실거래 준비 상태
 
-현재 평가는 다음과 같습니다.
-
 - **Oracle dry-run production:** GO
 - **Toss account read-only API:** GO
+- **Toss write-boundary 정적/회귀 검증:** GO
 - **live commissioning 코드/절차:** 준비됨
 - **실계좌 최초 commissioning:** 계좌 청정화 전까지 BLOCKED
 - **LIVE-ARMED:** 아직 아님
 - **LIVE BUY:** LOCKED
-- **실제 Toss 주문:** 아직 0건
+- **실제 Toss 주문:** 0건
 
 최초 전환은 아래 순서만 허용합니다.
 
@@ -125,8 +136,8 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 수동으로 별도 �
 1. 실운영 직전 QQQ/TQQQ/SOXL 기존 보유 및 미체결 주문 0을 당일 read-only preflight로 확인
 2. **fresh separate live DB**로 owner-only LIVE-ARMED commissioning PASS
 3. `live_commissioned=1`, `operator_buy_halt=1`, broker↔DB reconciliation PASS 확인
-4. 실제 Toss write path(`POST order → orderId/clientOrderId → 주문조회 → 부분/완전체결·취소 → 원장반영`)를 별도 commissioning으로 검증
-5. timeout/429/5xx/UNKNOWN에서 동일 주문을 blind resubmit하지 않는 계약 유지
+4. 실제 Toss write path(`POST order → orderId/clientOrderId → 주문조회 → 부분/완전체결·취소 → 원장반영`)를 **실계좌에서 별도 commissioning**으로 최종 검증
+5. timeout/401/429/5xx/UNKNOWN에서 동일 write 요청을 자동 replay하지 않는 계약 유지
 6. 모든 Go-Live 체크리스트 PASS 뒤에만 **별도 명시적 승인**으로 BUY 잠금을 해제
 
 실계좌 canary나 최초 BUY는 자동 실행하지 않습니다.
