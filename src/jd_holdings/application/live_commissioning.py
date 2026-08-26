@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
+
 from .account_preflight import RealAccountPreflight
 from .database import SQLiteRepository
-from .operational_safety import OPERATOR_BUY_HALT_KEY
+from .operational_safety import (
+    OPERATOR_BUY_HALT_AT_KEY,
+    OPERATOR_BUY_HALT_KEY,
+)
+from .reconciliation import ReconciliationService
+
+LIVE_COMMISSIONED_KEY = "live_commissioned"
+LIVE_COMMISSIONED_AT_KEY = "live_commissioned_at"
 
 
 @dataclass(frozen=True)
@@ -19,12 +29,22 @@ class LiveCommissioningResult:
         return not self.issues
 
 
+@dataclass(frozen=True)
+class LiveReleaseGateResult:
+    issues: tuple[str, ...]
+
+    @property
+    def safe(self) -> bool:
+        return not self.issues
+
+
 class LiveCommissioningPreflight:
     """Fail-closed checks for a fresh, separate live ledger before first activation.
 
-    This does not enable live trading. It proves only that the prospective live DB
-    is clean, the real account has no unmanaged JDSS symbols/open orders, and enough
-    USD buying power is visible. The actual live unlock remains a separate change.
+    This never places an order. It proves that the prospective live DB is fresh, the
+    real account has no pre-existing JDSS-managed holdings/open orders, and enough USD
+    buying power is visible. A successful commissioning arms the persistent BUY halt;
+    the operator must later release that halt explicitly through Telegram.
     """
 
     def __init__(self, repository: SQLiteRepository, account_client: Any) -> None:
@@ -67,8 +87,12 @@ class LiveCommissioningPreflight:
         return LiveCommissioningResult(unique, buying_power)
 
     def arm_buy_halt(self) -> None:
-        """Force the prospective live runtime to boot with risk-increasing BUY blocked."""
+        """Mark this fresh ledger as commissioned and start it with BUY blocked."""
+        now = datetime.now(UTC).isoformat()
         self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
+        self.repository.set_system_value(OPERATOR_BUY_HALT_AT_KEY, now)
+        self.repository.set_system_value(LIVE_COMMISSIONED_KEY, "1")
+        self.repository.set_system_value(LIVE_COMMISSIONED_AT_KEY, now)
         self.repository.log_event(
             "SAFE_MODE",
             "LIVE_COMMISSIONING_BUY_HALT_ARMED",
@@ -102,3 +126,107 @@ class LiveCommissioningPreflight:
                 issues.append(f"LIVE_DB_ACTIVE_CORE_POSITIONS:{len(core_rows)}")
 
         return tuple(issues)
+
+
+def arm_live_startup_buy_halt(repository: SQLiteRepository) -> None:
+    """Fail closed on every live process start/restart.
+
+    A process restart must never inherit a previously released BUY state. This helper
+    is called before constructing the live broker so a newly started process always
+    requires a fresh Telegram resume before any risk-increasing order can cross the
+    OrderManager boundary.
+    """
+    if repository.get_system_value(LIVE_COMMISSIONED_KEY) != "1":
+        raise RuntimeError("live 전용 원장이 commissioning 완료 상태가 아닙니다")
+    now = datetime.now(UTC).isoformat()
+    repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
+    repository.set_system_value(OPERATOR_BUY_HALT_AT_KEY, now)
+    repository.log_event(
+        "SAFE_MODE",
+        "LIVE_STARTUP_BUY_HALT_ARMED",
+        "live 서비스 시작/재시작으로 신규 BUY를 자동 차단했습니다",
+    )
+
+
+class LiveReleaseGate:
+    """Order-write-free gate for a routine live release switch or restart.
+
+    An established live ledger may legitimately contain managed positions. A release
+    is switchable only while BUY is halted, there are no outstanding orders/active
+    approvals, and broker state reconciles with the persisted ledger. This class never
+    submits or cancels an order.
+    """
+
+    def __init__(self, repository: SQLiteRepository, broker: Any) -> None:
+        self.repository = repository
+        self.broker = broker
+
+    def run(self) -> LiveReleaseGateResult:
+        issues: list[str] = []
+
+        if self.repository.get_system_value(LIVE_COMMISSIONED_KEY) != "1":
+            issues.append("LIVE_RELEASE_NOT_COMMISSIONED")
+        if self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) != "1":
+            issues.append("LIVE_RELEASE_BUY_HALT_NOT_ARMED")
+
+        local_open_orders = self.repository.open_orders()
+        if local_open_orders:
+            issues.append(f"LIVE_RELEASE_LOCAL_OPEN_ORDERS:{len(local_open_orders)}")
+
+        with self.repository.transaction() as connection:
+            active_approvals = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM approvals WHERE status = 'ACTIVE'"
+                ).fetchone()[0]
+            )
+        if active_approvals:
+            issues.append(f"LIVE_RELEASE_ACTIVE_APPROVALS:{active_approvals}")
+
+        managed_symbols = list(ALLOCATION_SYMBOLS)
+        if self.repository.config.idle_cash.enabled:
+            managed_symbols.append(self.repository.config.idle_cash.symbol)
+        for symbol in dict.fromkeys(managed_symbols):
+            try:
+                broker_open_orders = self.broker.list_orders(
+                    status="OPEN", symbol=symbol, limit=100
+                )
+            except Exception as exc:
+                issues.append(
+                    f"LIVE_RELEASE_BROKER_OPEN_ORDER_LOOKUP_FAILED:{symbol}:{type(exc).__name__}"
+                )
+            else:
+                if broker_open_orders:
+                    issues.append(
+                        f"LIVE_RELEASE_BROKER_OPEN_ORDERS:{symbol}:{len(broker_open_orders)}"
+                    )
+
+        try:
+            mismatches = ReconciliationService(
+                self.repository.config,
+                self.repository,
+                self.broker,
+            ).run()
+        except Exception as exc:
+            issues.append(f"LIVE_RELEASE_RECONCILIATION_ERROR:{type(exc).__name__}")
+        else:
+            for symbol, symbol_issues in sorted(mismatches.items()):
+                issues.append(
+                    f"LIVE_RELEASE_RECONCILIATION_FAILED:{symbol}:{'|'.join(symbol_issues)}"
+                )
+
+        unique = tuple(dict.fromkeys(issues))
+        if unique:
+            self.repository.log_event(
+                "SAFE_MODE",
+                "LIVE_RELEASE_GATE_FAILED",
+                ";".join(unique),
+                context={"database": self.repository.db_path.name},
+            )
+        else:
+            self.repository.log_event(
+                "INFO",
+                "LIVE_RELEASE_GATE_PASSED",
+                "BUY HALT·미체결 0·정합성 조건을 확인했습니다",
+                context={"database": self.repository.db_path.name},
+            )
+        return LiveReleaseGateResult(unique)
