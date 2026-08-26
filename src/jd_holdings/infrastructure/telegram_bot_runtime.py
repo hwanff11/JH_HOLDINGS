@@ -51,9 +51,15 @@ def _plain_strategy_summary(
     if leverage <= 1.0:
         return "시장 방향성이 강하지 않아 기본 노출을 유지하며 과도한 레버리지를 피하는 상태입니다."
     if rs_active:
-        base = "기술주 상승추세가 우호적이고 반도체도 상대적으로 강해 QQQ를 중심으로 TQQQ·SOXL 비중을 함께 가져가는 상태입니다."
+        base = (
+            "기술주 상승추세가 우호적이고 반도체도 상대적으로 강해 QQQ를 중심으로 "
+            "TQQQ·SOXL 비중을 함께 가져가는 상태입니다."
+        )
     else:
-        base = "기술주 상승추세는 우호적이지만 반도체 상대강도 우위는 없어 QQQ·TQQQ 중심으로 운용하는 상태입니다."
+        base = (
+            "기술주 상승추세는 우호적이지만 반도체 상대강도 우위는 없어 "
+            "QQQ·TQQQ 중심으로 운용하는 상태입니다."
+        )
     if tqqq_active and soxl_active:
         return base + " TQQQ와 SOXL 모두 추가 레버리지 조건도 충족했습니다."
     if tqqq_active:
@@ -122,6 +128,12 @@ def _format_daily_portfolio_brief(
             ]
         )
 
+    summary = _plain_strategy_summary(
+        leverage,
+        rs_active=rs_active,
+        tqqq_active=tqqq_active,
+        soxl_active=soxl_active,
+    )
     lines.extend(
         [
             "",
@@ -139,7 +151,7 @@ def _format_daily_portfolio_brief(
             f"SOXL {'✅' if soxl_active else '➖'}",
             "",
             "쉽게 말하면,",
-            f"<b>{_plain_strategy_summary(leverage, rs_active=rs_active, tqqq_active=tqqq_active, soxl_active=soxl_active)}</b>",
+            f"<b>{summary}</b>",
         ]
     )
 
