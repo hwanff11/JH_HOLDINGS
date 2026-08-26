@@ -9,6 +9,7 @@ from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
 
 from .account_preflight import RealAccountPreflight
 from .database import SQLiteRepository
+from .external_baseline import capture_external_baseline
 from .operational_safety import (
     OPERATOR_BUY_HALT_AT_KEY,
     OPERATOR_BUY_HALT_KEY,
@@ -23,6 +24,7 @@ LIVE_COMMISSIONED_AT_KEY = "live_commissioned_at"
 class LiveCommissioningResult:
     issues: tuple[str, ...]
     buying_power: Decimal | None
+    external_baseline_symbols: tuple[str, ...] = ()
 
     @property
     def safe(self) -> bool:
@@ -42,9 +44,12 @@ class LiveCommissioningPreflight:
     """Fail-closed checks for a fresh, separate live ledger before first activation.
 
     This never places an order. It proves that the prospective live DB is fresh, the
-    real account has no pre-existing JDSS-managed holdings/open orders, and enough USD
-    buying power is visible. A successful commissioning arms the persistent BUY halt;
-    the operator must later release that halt explicitly through Telegram.
+    configured real account is readable, managed-symbol open orders are absent, and
+    enough USD buying power is visible. Pre-existing whole-share QQQ/TQQQ/SOXL
+    holdings are captured once as an immutable *external baseline*: they remain
+    outside JDSS ownership, HWM accounting and strategy SELL sizing. A successful
+    commissioning arms the persistent BUY halt; the operator must later release that
+    halt explicitly through Telegram.
     """
 
     def __init__(self, repository: SQLiteRepository, account_client: Any) -> None:
@@ -53,7 +58,11 @@ class LiveCommissioningPreflight:
 
     def run(self) -> LiveCommissioningResult:
         issues = list(self._inspect_local_ledger())
-        account = RealAccountPreflight(self.repository, self.account_client).run()
+        account = RealAccountPreflight(
+            self.repository,
+            self.account_client,
+            allow_managed_holdings_as_external=True,
+        ).run()
         issues.extend(account.issues)
 
         buying_power = account.buying_power
@@ -68,6 +77,18 @@ class LiveCommissioningPreflight:
                     # Do not put a private account balance into public Actions logs.
                     issues.append("LIVE_BUYING_POWER_BELOW_CAPITAL")
 
+        baseline_symbols: tuple[str, ...] = ()
+        if not issues:
+            try:
+                baseline_symbols = capture_external_baseline(
+                    self.repository,
+                    dict(account.managed_holdings),
+                )
+            except Exception as exc:
+                issues.append(
+                    f"LIVE_EXTERNAL_BASELINE_CAPTURE_FAILED:{type(exc).__name__}"
+                )
+
         unique = tuple(dict.fromkeys(issues))
         if unique:
             self.repository.log_event(
@@ -81,9 +102,13 @@ class LiveCommissioningPreflight:
                 "INFO",
                 "LIVE_COMMISSIONING_PREFLIGHT_PASSED",
                 "실계좌 최초 기동 사전점검을 통과했습니다",
-                context={"database": self.repository.db_path.name},
+                context={
+                    "database": self.repository.db_path.name,
+                    "external_baseline_symbols": list(baseline_symbols),
+                    "private_quantities_redacted": True,
+                },
             )
-        return LiveCommissioningResult(unique, buying_power)
+        return LiveCommissioningResult(unique, buying_power, baseline_symbols)
 
     def arm_buy_halt(self) -> None:
         """Mark this fresh ledger as commissioned and start it with BUY blocked."""
@@ -150,10 +175,11 @@ def arm_live_startup_buy_halt(repository: SQLiteRepository) -> None:
 class LiveReleaseGate:
     """Order-write-free gate for a routine live release switch or restart.
 
-    An established live ledger may legitimately contain managed positions. A release
-    is switchable only while BUY is halted, there are no outstanding orders/active
-    approvals, and broker state reconciles with the persisted ledger. This class never
-    submits or cancels an order.
+    An established live ledger may legitimately contain JDSS-managed positions plus
+    the immutable external baseline captured at first commissioning. A release is
+    switchable only while BUY is halted, there are no outstanding orders/active
+    approvals, and broker state reconciles with both ledgers. This class never submits
+    or cancels an order.
     """
 
     def __init__(self, repository: SQLiteRepository, broker: Any) -> None:
