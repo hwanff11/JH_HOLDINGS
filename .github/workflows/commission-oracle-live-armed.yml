@@ -21,8 +21,9 @@ jobs:
       github.actor == github.repository_owner &&
       startsWith(github.event.issue.title, '[commission-oracle-live-armed]'))
     runs-on: ubuntu-latest
-    # Reuse the existing Oracle credential scope. The workflow itself changes the
-    # runtime to live only after a fresh live-ledger preflight arms BUY HALT.
+    # Reuse the existing Oracle credential scope. The workflow changes runtime mode
+    # only after a fresh live-ledger preflight arms BUY HALT. The legacy strategy
+    # live_enabled flag intentionally remains false as an independent default lock.
     environment: oracle-dry-run
     steps:
       - name: Checkout exact latest main
@@ -58,7 +59,7 @@ jobs:
             tests/test_order_flow.py \
             tests/test_deployment_contract.py
           jdss validate-config
-          grep -q 'live_enabled: true' strategy.yaml
+          grep -q 'live_enabled: false' strategy.yaml
           grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml
           grep -q 'LIVE_STARTUP_BUY_HALT_ARMED' src/jd_holdings/application/live_commissioning.py
           grep -q 'JDSS_LIVE_CONFIRMATION=ENABLE_JDSS_LIVE_ORDERS' commission_live_armed.sh
