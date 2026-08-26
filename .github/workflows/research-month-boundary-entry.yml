@@ -1,6 +1,14 @@
 name: Month Boundary Entry Research
 
 on:
+  push:
+    branches:
+      - "research/month-boundary-entry-20260901"
+    paths:
+      - "scripts/research_month_boundary_entry.py"
+      - "scripts/research_initial_entry_scenarios.py"
+      - "src/jd_holdings/research/initial_entry.py"
+      - ".github/workflows/research-month-boundary-entry.yml"
   pull_request:
     paths:
       - "scripts/research_month_boundary_entry.py"
@@ -11,6 +19,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: month-boundary-entry-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   month-boundary-entry:
