@@ -10,6 +10,7 @@ from jd_holdings.application.live_runtime_services import (
 
 from .market_clock import is_toss_order_maintenance_window
 from .operational_safety_telegram import OperationalSafetyTelegramBotApp
+from .safe_mode_diagnostics import broker_diagnostic, operator_action
 from .telegram_bot import SEOUL_TZ, _daily_analysis_is_due, _format_idle_cash_event
 from .telegram_bot_runtime import _format_daily_portfolio_brief
 
@@ -38,6 +39,109 @@ class HardenedLiveInitialOnboardingPortfolioService(
 
 class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
     """Run order settlement before reconciliation and portfolio decisions in live mode."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._toss_diagnostic_notice_at: dict[str, float] = {}
+        super().__init__(*args, **kwargs)
+
+    def _notify_runtime_error(
+        self,
+        event_type: str,
+        title: str,
+        exc: Exception,
+        *,
+        cooldown_seconds: int = 600,
+    ) -> None:
+        super()._notify_runtime_error(
+            event_type,
+            title,
+            exc,
+            cooldown_seconds=cooldown_seconds,
+        )
+        diagnostic = broker_diagnostic(exc)
+        if diagnostic is None:
+            return
+        fingerprint = ":".join(
+            (
+                event_type,
+                str(diagnostic.http_status or ""),
+                str(diagnostic.error_code or ""),
+                str(diagnostic.request_id or ""),
+            )
+        )
+        now = time.monotonic()
+        last = self._toss_diagnostic_notice_at.get(fingerprint)
+        if last is not None and now - last < cooldown_seconds:
+            return
+        self._toss_diagnostic_notice_at[fingerprint] = now
+        lines = [
+            "🏦 <b>[토스증권 API 오류 상세]</b>",
+            "",
+            f"• 발생 작업 : <b>{html.escape(title)}</b>",
+            f"• HTTP 상태 : <code>{diagnostic.http_status if diagnostic.http_status is not None else '없음'}</code>",
+            f"• 토스 오류코드 : <code>{html.escape(diagnostic.error_code or '없음')}</code>",
+            f"• 재시도 가능 오류 : <b>{'예' if diagnostic.retryable else '아니오'}</b>",
+        ]
+        if diagnostic.request_id:
+            lines.append(
+                f"• 요청 추적ID : <code>{html.escape(diagnostic.request_id)}</code>"
+            )
+        lines.extend(
+            [
+                f"• 사유 : <code>{html.escape(diagnostic.summary)}</code>",
+                "",
+                "🛡️ <b>운영자 조치</b>",
+                "1. 토스 앱에서 보유수량·미체결·최근 체결을 확인하세요.",
+                "2. 주문 결과가 불명확하면 임의 재주문하지 마세요.",
+                "3. <code>/errors</code> → <code>/order</code> → <code>/account</code> 순으로 확인하세요.",
+                "4. SAFE_MODE라면 원인과 계좌·원장 정합성을 확인한 뒤에만 <code>/resume</code> 하세요.",
+            ]
+        )
+        try:
+            self._send("\n".join(lines))
+        except Exception:
+            # The primary runtime error was already logged by the parent method.
+            pass
+
+    def _send_reconciliation_alert(
+        self,
+        symbol: str,
+        issues: list[str],
+        *,
+        cooldown_seconds: int = 600,
+    ) -> None:
+        fingerprint = f"{symbol}:{'|'.join(sorted(issues))}"
+        now = time.monotonic()
+        last = self._reconciliation_notice_at.get(fingerprint)
+        if last is not None and now - last < cooldown_seconds:
+            return
+        self._reconciliation_notice_at[fingerprint] = now
+        issue_lines = "\n".join(
+            f"• <code>{html.escape(issue)}</code>" for issue in issues
+        )
+        actions = []
+        for issue in issues:
+            action = operator_action(issue)
+            if action not in actions:
+                actions.append(action)
+        action_lines = "\n".join(
+            f"{index}. {html.escape(action)}"
+            for index, action in enumerate(actions, start=1)
+        )
+        self._send(
+            f"🚨 <b>[{html.escape(symbol)} 안전정지(SAFE_MODE)]</b>\n\n"
+            "<b>발생 원인</b>\n"
+            f"{issue_lines}\n\n"
+            "<b>현재 상태</b>\n"
+            "• 신규 BUY : ⛔ 차단\n"
+            "• 위험축소 SELL·주문감시 : 가능한 범위에서 계속\n"
+            "• SAFE_MODE : 원인 확인 전 임의 해제 금지\n\n"
+            "<b>지금 할 일</b>\n"
+            f"{action_lines}\n"
+            f"{len(actions) + 1}. <code>/errors</code>, <code>/order</code>, <code>/account</code>를 확인하세요.\n"
+            f"{len(actions) + 2}. 문제가 해결되고 Toss/DB가 일치한 뒤에만 <code>/resume</code> 2단계 검증을 진행하세요.\n\n"
+            "같은 원인은 10분 동안 반복 알림하지 않습니다."
+        )
 
     def _run_order_safety_cycle(self) -> bool:
         monitor_clean = True
