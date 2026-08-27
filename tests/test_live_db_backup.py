@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
-from scripts.backup_live_db import create_backup, integrity_check
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "backup_live_db.py"
+SPEC = importlib.util.spec_from_file_location("backup_live_db", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+create_backup = MODULE.create_backup
+integrity_check = MODULE.integrity_check
 
 
 def _database(path):
