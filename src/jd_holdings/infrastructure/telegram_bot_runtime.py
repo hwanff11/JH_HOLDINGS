@@ -102,7 +102,7 @@ def _format_daily_portfolio_brief(
     risk_reduction = any("위험축소" in event for event in remaining)
 
     lines = [
-        "🌅 <b>[JDSS 아침 운용 브리핑]</b>",
+        "🌅 <b>[JDSS 실거래 아침 브리핑]</b>",
         f"기준일 : <code>{html.escape(trade_date)}</code>",
         "",
         "✅ <b>오늘의 결론</b>",
@@ -178,6 +178,7 @@ def _format_daily_portfolio_brief(
             "",
             "━━━━━━━━━━━━━━",
             "🧾 실제 주문 필요 여부 → <code>/today</code>",
+            "💰 실제 계좌 확인 → <code>/account</code>",
             "📊 상세 보유·목표 → <code>/portfolio</code>",
         ]
     )
@@ -190,55 +191,50 @@ def _operator_text(text: str) -> str:
         ("SCHEDULER_ERROR", "자동 점검 오류 · 다음 주기에 재시도"),
         ("RECONCILIATION_FAILED", "계좌·원장 불일치 · 신규매수 차단"),
         ("SGOV_RECONCILIATION_FAILED", "SGOV 원장 불일치 · 신규매수 차단"),
-        ("CORE_SELL_INCOMPLETE", "코어 위험축소 미완료 · SAFE_MODE"),
-        ("CORE_ORDER_SUBMISSION_UNKNOWN", "코어 주문 결과 불명 · SAFE_MODE"),
-        ("ORDER_SUBMISSION_UNKNOWN", "구버전 direct 주문 결과 불명 · SAFE_MODE"),
+        ("CORE_SELL_INCOMPLETE", "코어 위험축소 미완료 · 안전정지(SAFE_MODE)"),
+        ("CORE_ORDER_SUBMISSION_UNKNOWN", "코어 주문 결과 불명 · 안전정지(SAFE_MODE)"),
+        ("ORDER_SUBMISSION_UNKNOWN", "구버전 direct 주문 결과 불명 · 안전정지(SAFE_MODE)"),
         (
             "• 부분체결·TP 주문 복구·재시작 정합성 검증은 계속 동작합니다.",
             "• 코어 부분체결·TP 주문 복구·재시작 정합성 검증은 계속 동작합니다.\n"
-            "• 코어 위험축소가 불완전하면 SAFE_MODE에서 신규매수를 차단합니다.",
+            "• 코어 위험축소가 불완전하면 안전정지(SAFE_MODE)에서 신규매수를 차단합니다.",
         ),
     )
     for old, new in replacements:
         text = text.replace(old, new)
 
+    legacy_title = "✅ <b>[모의주문 전송 완료]</b> ✨"
     if "처리 상태</b> : <code>UNKNOWN</code>" in text:
-        text = text.replace(
-            "✅ <b>[모의주문 전송 완료]</b> ✨",
-            "🚨 <b>[모의주문 결과 확인 필요]</b>",
-        )
+        text = text.replace(legacy_title, "🚨 <b>[실주문 결과 확인 필요]</b>")
         text += (
-            "\n\n🛡️ 주문 결과를 성공으로 추정하지 않습니다. "
-            "<code>/errors</code>와 SAFE_MODE를 확인하세요."
+            "\n\n🛡️ 주문 결과를 성공으로 추정하지 않습니다. 재주문하지 말고 "
+            "<code>/order</code>, <code>/account</code>, 안전정지(SAFE_MODE)를 확인하세요."
         )
-    elif any(
-        f"처리 상태</b> : <code>{status}</code>" in text
-        for status in ("REJECTED", "CANCELED", "REPLACED")
-    ):
-        text = text.replace(
-            "✅ <b>[모의주문 전송 완료]</b> ✨",
-            "⚠️ <b>[모의주문 미완료]</b>",
-        )
+    elif "처리 상태</b> : <code>REJECTED</code>" in text:
+        text = text.replace(legacy_title, "⚠️ <b>[실주문 거부]</b>")
         text += (
-            "\n\n💡 코어 매수라면 유효시간 안에서 "
-            "<code>/signal</code>로 재승인 여부를 확인하세요."
+            "\n\n💡 주문이 완료되지 않았습니다. 원인을 확인한 뒤 "
+            "유효시간 안에서 새 승인 여부를 검토하세요."
         )
+    elif "처리 상태</b> : <code>CANCELED</code>" in text:
+        text = text.replace(legacy_title, "⚠️ <b>[실주문 취소 확인]</b>")
+        text += "\n\n💡 필요하면 최신 가격·수량으로 새 승인부터 다시 진행하세요."
+    elif "처리 상태</b> : <code>REPLACED</code>" in text:
+        text = text.replace(legacy_title, "⚠️ <b>[실주문 변경 확인 필요]</b>")
+        text += "\n\n💡 <code>/order</code>와 <code>/account</code>에서 실제 주문 상태를 확인하세요."
     elif "처리 상태</b> : <code>PARTIAL_FILLED</code>" in text:
-        text = text.replace(
-            "✅ <b>[모의주문 전송 완료]</b> ✨",
-            "⏳ <b>[모의주문 부분체결]</b>",
-        )
-        text += "\n\n💡 남은 수량은 주문 모니터가 계속 확인합니다."
+        text = text.replace(legacy_title, "⏳ <b>[실주문 부분체결]</b>")
+        text += "\n\n💡 일부만 체결됐습니다. 남은 수량은 주문 모니터가 계속 확인합니다."
+    elif "처리 상태</b> : <code>FILLED</code>" in text:
+        text = text.replace(legacy_title, "✅ <b>[실주문 체결 완료]</b>")
+        text += "\n\n💡 <code>/account</code>에서 실제 보유수량과 원장 대조 결과를 확인할 수 있습니다."
     elif any(
         f"처리 상태</b> : <code>{status}</code>" in text
         for status in ("PENDING", "SUBMITTED", "CREATED")
     ):
-        text = text.replace(
-            "✅ <b>[모의주문 전송 완료]</b> ✨",
-            "⏳ <b>[모의주문 접수]</b>",
-        )
+        text = text.replace(legacy_title, "⏳ <b>[실주문 접수]</b>")
         text += (
-            "\n\n💡 아직 체결 완료가 아닙니다. "
+            "\n\n💡 토스에 주문은 접수됐지만 아직 체결 완료가 아닙니다. "
             "<code>/order</code>에서 진행 상태를 확인하세요."
         )
     return text
@@ -281,7 +277,7 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
         lines = [
             "🚨 <b>[JDSS 시작 정합성 점검 실패]</b>",
             "",
-            "봇은 시작됐지만 아래 항목은 SAFE_MODE입니다. 신규매수는 차단됩니다.",
+            "봇은 시작됐지만 아래 항목은 안전정지(SAFE_MODE)입니다. 신규매수는 차단됩니다.",
         ]
         for symbol, issues in mismatches.items():
             lines.append(f"• <b>{html.escape(symbol)}</b>: {html.escape(', '.join(issues))}")
@@ -347,9 +343,9 @@ class RuntimeTelegramBotApp(V322TelegramBotApp):
             return
         self._reconciliation_notice_at[fingerprint] = now
         self._send(
-            f"🚨 <b>[{html.escape(symbol)} SAFE_MODE 경고]</b>\n"
+            f"🚨 <b>[{html.escape(symbol)} 안전정지(SAFE_MODE) 경고]</b>\n"
             + "\n".join(html.escape(issue) for issue in issues)
-            + "\n\n💡 같은 원인은 10분 동안 반복 알림하지 않습니다. "
+            + "\n\n💡 신규매수는 차단됩니다. 같은 원인은 10분 동안 반복 알림하지 않습니다. "
             "<code>/errors</code>에서 기록을 확인하세요."
         )
 

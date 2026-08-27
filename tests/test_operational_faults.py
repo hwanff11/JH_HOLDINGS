@@ -305,19 +305,31 @@ def test_incomplete_core_sell_enters_safe_mode(tmp_path, config):
     )
 
 
-def test_operator_text_distinguishes_pending_rejected_and_unknown():
-    pending = _operator_text(
-        "✅ <b>[모의주문 전송 완료]</b> ✨\n• <b>처리 상태</b> : <code>PENDING</code>"
-    )
-    rejected = _operator_text(
-        "✅ <b>[모의주문 전송 완료]</b> ✨\n• <b>처리 상태</b> : <code>REJECTED</code>"
-    )
-    unknown = _operator_text(
-        "✅ <b>[모의주문 전송 완료]</b> ✨\n• <b>처리 상태</b> : <code>UNKNOWN</code>"
-    )
-    assert "모의주문 접수" in pending and "/order" in pending
-    assert "모의주문 미완료" in rejected and "/signal" in rejected
-    assert "결과 확인 필요" in unknown and "SAFE_MODE" in unknown
+def test_operator_text_distinguishes_live_order_states():
+    source = "✅ <b>[모의주문 전송 완료]</b> ✨\n• <b>처리 상태</b> : <code>{}</code>"
+    pending = _operator_text(source.format("PENDING"))
+    partial = _operator_text(source.format("PARTIAL_FILLED"))
+    filled = _operator_text(source.format("FILLED"))
+    rejected = _operator_text(source.format("REJECTED"))
+    canceled = _operator_text(source.format("CANCELED"))
+    replaced = _operator_text(source.format("REPLACED"))
+    unknown = _operator_text(source.format("UNKNOWN"))
+
+    assert "실주문 접수" in pending and "/order" in pending
+    assert "실주문 부분체결" in partial and "남은 수량" in partial
+    assert "실주문 체결 완료" in filled and "/account" in filled
+    assert "실주문 거부" in rejected and "새 승인 여부" in rejected
+    assert "실주문 취소 확인" in canceled and "새 승인" in canceled
+    assert "실주문 변경 확인 필요" in replaced and "/order" in replaced
+    assert "실주문 결과 확인 필요" in unknown
+    assert "재주문하지 말고" in unknown and "/account" in unknown
+    assert "모의주문" not in pending
+    assert "모의주문" not in partial
+    assert "모의주문" not in filled
+    assert "모의주문" not in rejected
+    assert "모의주문" not in canceled
+    assert "모의주문" not in replaced
+    assert "모의주문" not in unknown
 
 
 def test_runtime_error_is_persisted_and_telegram_notice_is_rate_limited(tmp_path, config):

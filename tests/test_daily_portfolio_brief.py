@@ -18,7 +18,7 @@ def test_daily_portfolio_brief_uses_balanced_summary():
 
     assert remaining == ()
     assert brief is not None
-    assert "JDSS 아침 운용 브리핑" in brief
+    assert "JDSS 실거래 아침 브리핑" in brief
     assert "오늘의 결론" in brief
     assert "현재 목표비중과 운용상태를 유지합니다" in brief
     assert "지금 승인할 신규 매수 주문은 없습니다" in brief
