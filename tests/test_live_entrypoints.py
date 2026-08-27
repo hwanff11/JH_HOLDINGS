@@ -125,12 +125,16 @@ def test_live_bot_arms_buy_halt_before_broker_and_starts_app(monkeypatch, tmp_pa
     monkeypatch.setattr(live_bot, "OrderMonitor", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(
         live_bot,
-        "LiveInitialOnboardingPortfolioService",
+        "HardenedLiveInitialOnboardingPortfolioService",
         lambda *_args, **_kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(live_bot, "ReconciliationService", lambda *_args: reconciliation)
     monkeypatch.setattr(live_bot, "AnalysisService", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(live_bot, "OperationalSafetyTelegramBotApp", lambda *_args: app)
+    monkeypatch.setattr(
+        live_bot,
+        "HardenedOperationalSafetyTelegramBotApp",
+        lambda *_args: app,
+    )
 
     live_bot.main()
 
@@ -166,7 +170,7 @@ def test_live_bot_notifies_startup_reconciliation_mismatch(monkeypatch, tmp_path
     monkeypatch.setattr(live_bot, "OrderMonitor", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(
         live_bot,
-        "LiveInitialOnboardingPortfolioService",
+        "HardenedLiveInitialOnboardingPortfolioService",
         lambda *_args, **_kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
@@ -175,7 +179,11 @@ def test_live_bot_notifies_startup_reconciliation_mismatch(monkeypatch, tmp_path
         lambda *_args: SimpleNamespace(run=lambda: mismatch),
     )
     monkeypatch.setattr(live_bot, "AnalysisService", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(live_bot, "OperationalSafetyTelegramBotApp", lambda *_args: app)
+    monkeypatch.setattr(
+        live_bot,
+        "HardenedOperationalSafetyTelegramBotApp",
+        lambda *_args: app,
+    )
 
     live_bot.main()
 
