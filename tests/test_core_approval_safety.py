@@ -13,6 +13,7 @@ from jd_holdings.application.database import ApprovalError, SQLiteRepository
 from jd_holdings.application.order_manager import OrderManager
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.tp_manager import TakeProfitManager
+from jd_holdings.application.trading_service import QuoteChangedError
 from jd_holdings.bot import restore_dry_run_orders
 from jd_holdings.core.enums import PositionState
 from jd_holdings.core.execution import max_chase_price
@@ -99,7 +100,7 @@ def test_core_execution_rechecks_session_after_quote(tmp_path, config):
 
     review_id, review_token = trading.create_review_approval(signal_id, now=premarket)
     quote = trading.consume_review(review_id, review_token, now=premarket)
-    with pytest.raises(ApprovalError, match="주문 허용 세션"):
+    with pytest.raises(QuoteChangedError, match="새로운 최종 확인"):
         trading.execute(
             quote.execution_approval_id,
             quote.execution_token,

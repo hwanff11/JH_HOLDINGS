@@ -14,6 +14,8 @@ from .database import ALL_ORDER_STATUSES, SQLiteRepository
 from .managed_account import reserve_buy_order_with_managed_cash
 from .operational_safety import BUY_EXECUTION_LOCK, OPERATOR_BUY_HALT_KEY
 
+LIVE_COMMISSIONED_KEY = "live_commissioned"
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -42,7 +44,17 @@ class OrderManager:
         self.settings = settings
 
     def _buy_is_halted(self) -> bool:
-        return self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
+        value = self.repository.get_system_value(OPERATOR_BUY_HALT_KEY)
+        if self.settings.trading_mode == "live" and value not in {"0", "1"}:
+            raise RuntimeError("실거래 신규 매수 잠금 상태가 누락·손상되었습니다")
+        return value == "1"
+
+    def _require_commissioned_live_ledger(self) -> None:
+        if self.settings.trading_mode != "live":
+            return
+        self.settings.require_live_trading()
+        if self.repository.get_system_value(LIVE_COMMISSIONED_KEY) != "1":
+            raise RuntimeError("실거래 준비 전환이 완료된 전용 원장이 아닙니다")
 
     def _buy_is_safe_mode_blocked(self, symbol: str) -> bool:
         """Keep every risk-increasing order behind the persisted SAFE_MODE boundary."""
@@ -132,15 +144,11 @@ class OrderManager:
             )
 
         is_buy = request.side.upper() == "BUY"
+        self._require_commissioned_live_ledger()
         if is_buy and self._buy_is_halted():
             raise RuntimeError("운영자 긴급정지 상태라 신규 BUY가 차단되어 있습니다")
         if is_buy and self._buy_is_safe_mode_blocked(request.symbol):
             raise RuntimeError("SAFE_MODE 상태라 신규 BUY가 차단되어 있습니다")
-        if self.settings.trading_mode == "live":
-            # Fail before touching the order ledger. A missing/incorrect live
-            # confirmation must not leave a stranded CREATED order behind.
-            self.settings.require_live_trading()
-
         if is_buy:
             if request.price is None:
                 raise RuntimeError("JDSS 매수는 관리현금 검증 가능한 지정가만 허용합니다")

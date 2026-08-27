@@ -50,6 +50,11 @@ def test_default_config_is_valid_and_complete(config):
     assert config.portfolio.enabled is True
     assert config.portfolio.total_capital == Decimal("50000")
     assert config.portfolio.live_enabled is False
+    assert config.global_.trading_sessions == {
+        "regular": True,
+        "after_hours": True,
+        "pre_market": True,
+    }
     assert config.portfolio.rebalance_tolerance_weight == Decimal("0")
     assert config.portfolio.core_underlyings == {
         "QQQ": "QQQ",

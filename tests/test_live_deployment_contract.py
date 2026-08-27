@@ -15,6 +15,14 @@ def test_live_runtime_is_explicit_and_default_strategy_lock_stays_closed():
     assert "broker = TossClient()" in live_bot
 
 
+def test_live_portfolio_adapter_never_mutates_mode_to_dry_run():
+    source = (ROOT / "src/jd_holdings/application/live_runtime_services.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'self.trading_mode = "dry_run"' not in source
+    assert "_explicit_live_runtime_enabled" in source
+
+
 def test_live_commissioning_is_fresh_db_first_and_buy_halt_first():
     script = (ROOT / "commission_live_armed.sh").read_text(encoding="utf-8")
     assert "set -Eeuo pipefail" in script

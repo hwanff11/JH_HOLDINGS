@@ -196,12 +196,37 @@ tar -xzf "$remote_archive" -C "$release_dir"
 "$release_dir/.venv/bin/jdss" --config "$release_dir/strategy.yaml" validate-config
 grep -q 'live_enabled: false' "$release_dir/strategy.yaml"
 
-# 전략 수치나 DB 스키마 코드가 달라지면 정기 코드 갱신 범위를 벗어납니다.
-# 이 경우에는 별도 전략 승인 또는 DB migration 계획이 필요합니다.
-cmp -s "$previous_current/strategy.yaml" "$release_dir/strategy.yaml" || {
-  echo "실거래 정기 배포에서 strategy.yaml 변경은 금지됩니다." >&2
-  exit 1
-}
+# 전략 수학·자금·DB 계약 변경은 정기 코드 갱신에서 금지합니다.
+# 2026-09-01 실거래 준비에서 승인된 단 하나의 예외는
+# 장전·장후 전용에서 장전·정규장·장후로 바꾸는 주문 세션 확장입니다.
+"$remote_python" - "$previous_current/strategy.yaml" "$release_dir/strategy.yaml" <<'PY'
+import copy
+import sys
+
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    previous = yaml.safe_load(stream)
+with open(sys.argv[2], encoding="utf-8") as stream:
+    candidate = yaml.safe_load(stream)
+
+previous_sessions = previous["global"]["trading_sessions"]
+candidate_sessions = candidate["global"]["trading_sessions"]
+approved_before = {"regular": False, "after_hours": True, "pre_market": True}
+approved_after = {"regular": True, "after_hours": True, "pre_market": True}
+if previous_sessions not in (approved_before, approved_after):
+    raise SystemExit(f"기존 주문 세션 계약이 승인 범위가 아닙니다: {previous_sessions}")
+if candidate_sessions != approved_after:
+    raise SystemExit(f"새 주문 세션 계약이 승인값과 다릅니다: {candidate_sessions}")
+
+previous_without_sessions = copy.deepcopy(previous)
+candidate_without_sessions = copy.deepcopy(candidate)
+previous_without_sessions["global"].pop("trading_sessions")
+candidate_without_sessions["global"].pop("trading_sessions")
+if previous_without_sessions != candidate_without_sessions:
+    raise SystemExit("주문 세션 외 strategy.yaml 변경은 실거래 정기 배포에서 금지됩니다")
+print("LIVE_STRATEGY_CONTRACT=PASS regular_session_enabled=1")
+PY
 cmp -s \
   "$previous_current/src/jd_holdings/application/database.py" \
   "$release_dir/src/jd_holdings/application/database.py" || {
