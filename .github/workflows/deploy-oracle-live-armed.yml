@@ -10,7 +10,10 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-jdss-deploy
+  # Every issue wakes all issue-based workflows before their job-level `if` is
+  # evaluated. A dedicated group prevents skipped dry-run/commission workflows
+  # from replacing this pending live update run.
+  group: oracle-jdss-live-update
   cancel-in-progress: false
 
 jobs:

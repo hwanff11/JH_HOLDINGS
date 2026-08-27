@@ -75,6 +75,7 @@ def test_live_update_workflow_is_owner_only_latest_main_and_test_gated():
     assert "ref: main" in workflow
     assert "github.actor == github.repository_owner" in workflow
     assert "[deploy-oracle-live-armed]" in workflow
+    assert "group: oracle-jdss-live-update" in workflow
     assert "tests/test_live_runtime_update_contract.py" in workflow
     assert "tests/test_live_runtime_safety.py" in workflow
     assert "bash ./deploy_live_armed.sh" in workflow
