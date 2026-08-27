@@ -36,15 +36,31 @@ def broker_diagnostic(exc: BaseException) -> BrokerDiagnostic | None:
 
 def operator_action(reason: str) -> str:
     code = reason.split(":", 1)[0]
-    return {
-        "BROKER_HOLDINGS_LOOKUP_FAILED": "토스 앱에서 보유수량·미체결 주문을 확인하고 임의 재주문하지 마세요.",
-        "BROKER_ORDER_LOOKUP_FAILED": "토스 앱의 주문내역을 확인하고 주문 결과가 확정될 때까지 재주문하지 마세요.",
-        "CORE_ORDER_REFRESH_FAILED": "토스 주문내역과 실제 보유수량을 확인하고 재주문하지 마세요.",
-        "CORE_ORDER_STATUS_UNKNOWN": "토스 앱에서 해당 주문의 최종 상태를 확인하고 재주문하지 마세요.",
-        "CORE_SELL_INCOMPLETE": "토스 앱에서 실제 매도 체결수량과 남은 미체결 수량을 확인하세요.",
-        "BROKER_DB_QTY_MISMATCH": "토스 실제 보유수량을 기준으로 확인하고 DB를 임의 수정하지 마세요.",
+    actions = {
+        "BROKER_HOLDINGS_LOOKUP_FAILED": (
+            "토스 앱에서 보유수량·미체결 주문을 확인하고 임의 재주문하지 마세요."
+        ),
+        "BROKER_ORDER_LOOKUP_FAILED": (
+            "토스 앱의 주문내역을 확인하고 주문 결과가 확정될 때까지 재주문하지 마세요."
+        ),
+        "CORE_ORDER_REFRESH_FAILED": (
+            "토스 주문내역과 실제 보유수량을 확인하고 재주문하지 마세요."
+        ),
+        "CORE_ORDER_STATUS_UNKNOWN": (
+            "토스 앱에서 해당 주문의 최종 상태를 확인하고 재주문하지 마세요."
+        ),
+        "CORE_SELL_INCOMPLETE": (
+            "토스 앱에서 실제 매도 체결수량과 남은 미체결 수량을 확인하세요."
+        ),
+        "BROKER_DB_QTY_MISMATCH": (
+            "토스 실제 보유수량을 기준으로 확인하고 DB를 임의 수정하지 마세요."
+        ),
         "UNKNOWN_ORDER_STATUS": "토스 주문내역에서 주문의 최종 상태를 먼저 확인하세요.",
-    }.get(code, "토스 앱에서 보유수량·미체결·최근 체결을 확인하고 임의 주문하지 마세요.")
+    }
+    return actions.get(
+        code,
+        "토스 앱에서 보유수량·미체결·최근 체결을 확인하고 임의 주문하지 마세요.",
+    )
 
 
 def safe_mode_lines(reason: str, exc: BaseException | None = None) -> tuple[str, ...]:
