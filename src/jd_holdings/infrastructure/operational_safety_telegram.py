@@ -16,6 +16,16 @@ RESUME_REVIEW_CALLBACK = "ops|resume|review"
 RESUME_CONFIRM_CALLBACK = "ops|resume|confirm"
 
 
+def _live_mode_operator_text(text: str, trading_mode: str) -> str:
+    """Remove dry-run-only guidance once the explicitly commissioned runtime is live."""
+    if trading_mode != "live":
+        return text
+    return text.replace(
+        "• 실거래는 잠겨 있고 forced dry-run만 허용합니다.",
+        "• 실계좌는 LIVE 연결 상태이며 신규 BUY는 운영자 BUY 잠금과 2단계 승인으로 통제합니다.",
+    )
+
+
 class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
     """Add an operator circuit breaker without weakening automatic risk reduction."""
 
@@ -28,6 +38,7 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
         )
 
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
+        text = _live_mode_operator_text(text, self.settings.trading_mode)
         halted = self.repository.get_system_value("operator_buy_halt") == "1"
         halt_state = "🚨 BUY 잠금" if halted else "✅ BUY 허용"
         if "[JDSS V3.2.2 운영 대시보드]" in text:

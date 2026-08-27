@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from decimal import Decimal
+from dataclasses import replace
+from decimal import ROUND_DOWN, Decimal
 
 from jd_holdings.core.models import OrderReceipt, OrderRequest
 from jd_holdings.infrastructure.toss_client import TossApiError, receipt_from_order
@@ -43,12 +44,48 @@ class OrderManager:
     def _buy_is_halted(self) -> bool:
         return self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
 
+    def _buy_is_safe_mode_blocked(self, symbol: str) -> bool:
+        """Keep every risk-increasing order behind the persisted SAFE_MODE boundary."""
+        if self.repository.get_system_value("v322_portfolio_safe_mode") == "1":
+            return True
+        normalized = symbol.upper()
+        if normalized not in self.repository.config.enabled_symbols:
+            return False
+        return self.repository.get_position(normalized).state.value == "SAFE_MODE"
+
+    @staticmethod
+    def _normalize_sell_limit_request(request: OrderRequest) -> OrderRequest:
+        """Floor US SELL limits to a broker-valid tick before reserving the order.
+
+        Risk-reducing SELL limits are derived from a live quote and a percentage
+        buffer, which can create more decimal places than the Toss US order API
+        accepts. Normalize locally so a safety SELL cannot fail only because of
+        arithmetic precision. JDSS-managed symbols are US equities/ETFs.
+        """
+        if (
+            request.side.upper() != "SELL"
+            or request.order_type.upper() != "LIMIT"
+            or request.price is None
+        ):
+            return request
+        price = request.price
+        if not price.is_finite() or price <= 0:
+            raise ValueError("SELL 지정가는 양수 유한값이어야 합니다")
+        tick = Decimal("0.0001") if price < Decimal("1") else Decimal("0.01")
+        normalized = (price / tick).to_integral_value(rounding=ROUND_DOWN) * tick
+        if normalized <= 0:
+            raise ValueError("SELL 지정가를 유효한 호가단위로 만들 수 없습니다")
+        if normalized == price:
+            return request
+        return replace(request, price=normalized)
+
     def submit(
         self,
         request: OrderRequest,
         *,
         cycle_id: str | None,
     ) -> OrderReceipt:
+        request = self._normalize_sell_limit_request(request)
         existing = self.repository.get_order_by_client_id(request.client_order_id)
         if existing:
             if existing.get("broker_order_id"):
@@ -97,6 +134,8 @@ class OrderManager:
         is_buy = request.side.upper() == "BUY"
         if is_buy and self._buy_is_halted():
             raise RuntimeError("운영자 긴급정지 상태라 신규 BUY가 차단되어 있습니다")
+        if is_buy and self._buy_is_safe_mode_blocked(request.symbol):
+            raise RuntimeError("SAFE_MODE 상태라 신규 BUY가 차단되어 있습니다")
         if self.settings.trading_mode == "live":
             # Fail before touching the order ledger. A missing/incorrect live
             # confirmation must not leave a stranded CREATED order behind.
@@ -146,6 +185,15 @@ class OrderManager:
                         )
                         raise RuntimeError(
                             "운영자 긴급정지가 활성화되어 BUY 제출을 중단했습니다"
+                        )
+                    if self._buy_is_safe_mode_blocked(request.symbol):
+                        self.repository.update_order(
+                            request.client_order_id,
+                            status="REJECTED",
+                            raw={"error": "SAFE_MODE"},
+                        )
+                        raise RuntimeError(
+                            "SAFE_MODE가 활성화되어 BUY 제출을 중단했습니다"
                         )
                     receipt = self.broker.place_order(request)
             else:
