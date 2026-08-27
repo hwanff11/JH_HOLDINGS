@@ -12,6 +12,7 @@ from .broker import Broker
 from .database import ALL_ORDER_STATUSES, SQLiteRepository
 
 CORE_ORDER_PURPOSES = {"CORE_REBALANCE_BUY", "CORE_REBALANCE_SELL"}
+TERMINAL_CORE_STATUSES = {"FILLED", "CANCELED", "REJECTED", "REPLACED"}
 
 
 class ReconciliationReceiptValidationError(RuntimeError):
@@ -118,6 +119,21 @@ class ReconciliationService:
                     (symbol, underlyings[symbol], now),
                 )
 
+    def _enter_allocation_safe_mode(self, symbol: str, reason: str) -> None:
+        self.repository.set_system_value("v322_portfolio_safe_mode", "1")
+        if symbol not in self.config.enabled_symbols:
+            return
+        position = self.repository.get_position(symbol)
+        if position.state == PositionState.SAFE_MODE:
+            return
+        self.repository.transition_position(
+            symbol,
+            expected_state=position.state,
+            new_state=PositionState.SAFE_MODE,
+            reason_code=reason,
+            expected_version=position.version,
+        )
+
     def _refresh_open_core_orders(self) -> dict[str, tuple[int, int]]:
         """Apply broker-confirmed core fills before holdings reconciliation.
 
@@ -126,7 +142,8 @@ class ReconciliationService:
         """
         recent: dict[str, list[int]] = {}
         for local in list(self.repository.open_orders()):
-            if str(local["purpose"]) not in CORE_ORDER_PURPOSES:
+            purpose = str(local["purpose"])
+            if purpose not in CORE_ORDER_PURPOSES:
                 continue
             broker_order_id = str(local.get("broker_order_id") or "")
             if not broker_order_id:
@@ -149,14 +166,8 @@ class ReconciliationService:
                 newly_filled = max(0, receipt.filled_quantity - prior_filled)
                 if receipt.filled_quantity > 0:
                     self.repository.apply_core_fill(client_order_id)
-                if newly_filled > 0:
-                    bucket = recent.setdefault(symbol, [0, 0])
-                    if str(local["side"]).upper() == "BUY":
-                        bucket[0] += newly_filled
-                    elif str(local["side"]).upper() == "SELL":
-                        bucket[1] += newly_filled
             except Exception as exc:
-                self.repository.set_system_value("v322_portfolio_safe_mode", "1")
+                self._enter_allocation_safe_mode(symbol, "CORE_ORDER_REFRESH_FAILED")
                 self.repository.log_event(
                     "SAFE_MODE",
                     "CORE_ORDER_REFRESH_FAILED",
@@ -171,6 +182,56 @@ class ReconciliationService:
                 raise RuntimeError(
                     "열린 코어 주문 상태 확인 실패로 SAFE_MODE입니다"
                 ) from exc
+
+            remaining = max(0, receipt.quantity - receipt.filled_quantity)
+            if receipt.status == "UNKNOWN":
+                self._enter_allocation_safe_mode(symbol, "CORE_ORDER_STATUS_UNKNOWN")
+                self.repository.log_event(
+                    "SAFE_MODE",
+                    "CORE_ORDER_STATUS_UNKNOWN",
+                    "계좌 대조 중 코어 주문 상태를 확정할 수 없습니다",
+                    symbol=symbol,
+                    context={
+                        "client_order_id": client_order_id,
+                        "broker_order_id": broker_order_id,
+                        "purpose": purpose,
+                        "filled_quantity": receipt.filled_quantity,
+                        "quantity": receipt.quantity,
+                    },
+                )
+                raise RuntimeError("코어 주문 상태 UNKNOWN으로 SAFE_MODE입니다")
+
+            if (
+                purpose == "CORE_REBALANCE_SELL"
+                and receipt.status in TERMINAL_CORE_STATUSES
+                and remaining > 0
+            ):
+                self._enter_allocation_safe_mode(symbol, "CORE_SELL_INCOMPLETE")
+                self.repository.log_event(
+                    "SAFE_MODE",
+                    "CORE_SELL_INCOMPLETE",
+                    "코어 위험축소 매도가 전량 완료되지 않았습니다",
+                    symbol=symbol,
+                    context={
+                        "client_order_id": client_order_id,
+                        "broker_order_id": broker_order_id,
+                        "status": receipt.status,
+                        "filled_quantity": receipt.filled_quantity,
+                        "quantity": receipt.quantity,
+                        "remaining_quantity": remaining,
+                    },
+                )
+                raise RuntimeError(
+                    f"{symbol} 위험축소가 미완료여서 SAFE_MODE입니다 "
+                    f"({receipt.filled_quantity}/{receipt.quantity}주, {receipt.status})"
+                )
+
+            if newly_filled > 0:
+                bucket = recent.setdefault(symbol, [0, 0])
+                if str(local["side"]).upper() == "BUY":
+                    bucket[0] += newly_filled
+                elif str(local["side"]).upper() == "SELL":
+                    bucket[1] += newly_filled
         return {symbol: (values[0], values[1]) for symbol, values in recent.items()}
 
     @staticmethod
