@@ -243,7 +243,13 @@ BUY 잠금이 풀려도 주문이 자동 발생하지 않습니다. 각 BUY는 �
 
 broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 broker 상태를 덮어쓰지 않습니다. broker holdings/orders가 Source of Truth이며 reconciliation이 우선입니다.
 
-## 10. 외부 Health Watch
+## 10. 정기 실거래 운영 프로그램 갱신
+
+최초 실거래 전환이 끝난 뒤 운영 프로그램만 갱신할 때는 `commission_live_armed.sh`를 다시 실행하지 않습니다. 기존 실거래 DB가 존재하므로 최초 전환 절차는 의도적으로 중단됩니다. 정기 갱신은 [`DEPLOYMENT.md`](DEPLOYMENT.md)의 **기존 실거래 운영 프로그램 갱신** 절차를 따릅니다.
+
+정기 갱신 전에는 `/halt` 상태, 미체결 주문 0건, 활성 승인 0건, 계좌·원장 대조 정상을 확인합니다. 배포는 기존 실거래 DB와 환경설정을 보존하며, 새 서비스 시작 시 신규 매수 잠금을 다시 설정합니다.
+
+## 11. 외부 Health Watch
 
 `.github/workflows/oracle-health-watch.yml`은 DRY-RUN/LIVE 모드를 구분해서 실제 사용 DB를 검사합니다.
 
@@ -260,7 +266,7 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 
 실패 시 `[oracle-health]` incident를 생성/갱신하고 복구 확인 시 닫습니다.
 
-## 11. 사고 대응
+## 12. 사고 대응
 
 ### 주문 상태 UNKNOWN
 
@@ -317,7 +323,7 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 
 비관리 종목의 개인 거래는 이 사고절차 대상이 아닙니다. 다만 비관리 종목 주문으로 USD `cashBuyingPower`가 줄어 JDSS 주문이 거부되면 개인 주문/현금 사용량을 확인하고, JDSS 주문을 임의 축소·재전송하기보다 최신 승인 흐름에서 다시 검토합니다.
 
-## 12. BUY 해제 전 최종 체크리스트
+## 13. BUY 해제 전 최종 체크리스트
 
 - 대상 runtime SHA 확인
 - CI 3종 PASS
