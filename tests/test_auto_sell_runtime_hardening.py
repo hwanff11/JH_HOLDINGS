@@ -12,6 +12,7 @@ from jd_holdings.core.models import OrderRequest
 from jd_holdings.infrastructure.live_runtime_hardening import (
     HardenedLiveInitialOnboardingPortfolioService,
     HardenedOperationalSafetyTelegramBotApp,
+    _live_order_monitor_interval,
 )
 from jd_holdings.settings import RuntimeSettings
 
@@ -279,6 +280,7 @@ def test_live_scheduler_skips_broker_jobs_during_toss_maintenance(
     assert calls == ["analysis"]
 
 
-def test_production_order_monitor_matches_scheduler_poll(config):
+def test_live_order_monitor_uses_30_second_effective_cadence(config):
     assert config.scheduler.poll_interval_seconds == 30
-    assert config.scheduler.order_monitor_interval_seconds == 30
+    assert config.scheduler.order_monitor_interval_seconds == 60
+    assert _live_order_monitor_interval(config) == 30
