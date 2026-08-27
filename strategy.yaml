@@ -191,7 +191,7 @@ scheduler:
   signal_delay_minutes: 5
   daily_analysis_time_kst: "07:00"
   poll_interval_seconds: 30
-  order_monitor_interval_seconds: 60
+  order_monitor_interval_seconds: 30
 
 idle_cash:
   enabled: false
