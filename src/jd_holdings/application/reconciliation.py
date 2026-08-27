@@ -9,10 +9,13 @@ from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
 from jd_holdings.infrastructure.toss_client import receipt_from_order
 
 from .broker import Broker
-from .database import SQLiteRepository
-from .order_manager import OrderManager
+from .database import ALL_ORDER_STATUSES, SQLiteRepository
 
 CORE_ORDER_PURPOSES = {"CORE_REBALANCE_BUY", "CORE_REBALANCE_SELL"}
+
+
+class ReconciliationReceiptValidationError(RuntimeError):
+    """Broker order snapshot cannot be tied to the persisted core order."""
 
 
 def _missing_broker_id_issue(
@@ -27,6 +30,66 @@ def _missing_broker_id_issue(
     if not stranded:
         return None
     return f"{prefix}OPEN_ORDER_WITHOUT_BROKER_ID:{','.join(sorted(set(stranded)))}"
+
+
+def _validate_core_receipt(receipt, local: dict) -> None:
+    """Validate a broker order snapshot without importing OrderManager.
+
+    Reconciliation is imported by operational_safety, while OrderManager imports
+    operational_safety. Keeping this validation local avoids that circular dependency
+    while preserving the same broker identity checks used at the order boundary.
+    """
+    client_order_id = str(local["client_order_id"])
+    symbol = str(local["symbol"])
+    side = str(local["side"])
+    quantity = int(local["qty"])
+
+    if receipt.client_order_id != client_order_id:
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 clientOrderId가 저장 주문과 다릅니다"
+        )
+    if not receipt.broker_order_id:
+        raise ReconciliationReceiptValidationError("브로커 응답에 orderId가 없습니다")
+    if receipt.status.upper() not in ALL_ORDER_STATUSES:
+        raise ReconciliationReceiptValidationError(
+            f"브로커 응답 주문상태가 잘못됐습니다: {receipt.status}"
+        )
+    if receipt.quantity != quantity:
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 주문수량이 저장 주문과 다릅니다"
+        )
+    if not 0 <= receipt.filled_quantity <= quantity:
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 체결수량이 유효하지 않습니다"
+        )
+    if receipt.filled_quantity > 0 and (
+        receipt.average_fill_price is None or receipt.average_fill_price <= 0
+    ):
+        raise ReconciliationReceiptValidationError(
+            "체결된 주문의 평균체결가가 유효하지 않습니다"
+        )
+
+    raw = receipt.raw if isinstance(receipt.raw, dict) else {}
+    raw_client_id = raw.get("clientOrderId")
+    if raw_client_id is not None and str(raw_client_id) != client_order_id:
+        raise ReconciliationReceiptValidationError(
+            "브로커 raw clientOrderId가 저장 주문과 다릅니다"
+        )
+    raw_symbol = raw.get("symbol") or raw.get("stockCode")
+    if raw_symbol is not None and str(raw_symbol).upper() != symbol.upper():
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 종목이 저장 주문과 다릅니다"
+        )
+    raw_side = raw.get("side")
+    if raw_side is not None and str(raw_side).upper() != side.upper():
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 매매방향이 저장 주문과 다릅니다"
+        )
+    raw_quantity = raw.get("quantity")
+    if raw_quantity is not None and Decimal(str(raw_quantity)) != quantity:
+        raise ReconciliationReceiptValidationError(
+            "브로커 raw 주문수량이 저장 주문과 다릅니다"
+        )
 
 
 class ReconciliationService:
@@ -74,13 +137,7 @@ class ReconciliationService:
             try:
                 raw = self.broker.get_order(broker_order_id)
                 receipt = receipt_from_order(raw, client_order_id)
-                OrderManager._validate_receipt(
-                    receipt,
-                    expected_client_order_id=client_order_id,
-                    expected_symbol=symbol,
-                    expected_side=str(local["side"]),
-                    expected_quantity=int(local["qty"]),
-                )
+                _validate_core_receipt(receipt, local)
                 self.repository.update_order(
                     client_order_id,
                     status=receipt.status,
