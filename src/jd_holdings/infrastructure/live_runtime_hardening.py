@@ -74,11 +74,12 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
         if last is not None and now - last < cooldown_seconds:
             return
         self._toss_diagnostic_notice_at[fingerprint] = now
+        http_status = diagnostic.http_status if diagnostic.http_status is not None else "없음"
         lines = [
             "🏦 <b>[토스증권 API 오류 상세]</b>",
             "",
             f"• 발생 작업 : <b>{html.escape(title)}</b>",
-            f"• HTTP 상태 : <code>{diagnostic.http_status if diagnostic.http_status is not None else '없음'}</code>",
+            f"• HTTP 상태 : <code>{http_status}</code>",
             f"• 토스 오류코드 : <code>{html.escape(diagnostic.error_code or '없음')}</code>",
             f"• 재시도 가능 오류 : <b>{'예' if diagnostic.retryable else '아니오'}</b>",
         ]
@@ -94,14 +95,14 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
                 "1. 토스 앱에서 보유수량·미체결·최근 체결을 확인하세요.",
                 "2. 주문 결과가 불명확하면 임의 재주문하지 마세요.",
                 "3. <code>/errors</code> → <code>/order</code> → <code>/account</code> 순으로 확인하세요.",
-                "4. SAFE_MODE라면 원인과 계좌·원장 정합성을 확인한 뒤에만 <code>/resume</code> 하세요.",
+                "4. SAFE_MODE라면 원인과 계좌·원장 정합성을 확인한 뒤에만 "
+                "<code>/resume</code> 하세요.",
             ]
         )
         try:
             self._send("\n".join(lines))
-        except Exception:
-            # The primary runtime error was already logged by the parent method.
-            pass
+        except Exception as notify_exc:
+            self.logger.warning("Toss API diagnostic Telegram send failed: %s", notify_exc)
 
     def _send_reconciliation_alert(
         self,
@@ -128,6 +129,8 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
             f"{index}. {html.escape(action)}"
             for index, action in enumerate(actions, start=1)
         )
+        check_step = len(actions) + 1
+        resume_step = len(actions) + 2
         self._send(
             f"🚨 <b>[{html.escape(symbol)} 안전정지(SAFE_MODE)]</b>\n\n"
             "<b>발생 원인</b>\n"
@@ -138,8 +141,10 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
             "• SAFE_MODE : 원인 확인 전 임의 해제 금지\n\n"
             "<b>지금 할 일</b>\n"
             f"{action_lines}\n"
-            f"{len(actions) + 1}. <code>/errors</code>, <code>/order</code>, <code>/account</code>를 확인하세요.\n"
-            f"{len(actions) + 2}. 문제가 해결되고 Toss/DB가 일치한 뒤에만 <code>/resume</code> 2단계 검증을 진행하세요.\n\n"
+            f"{check_step}. <code>/errors</code>, <code>/order</code>, "
+            "<code>/account</code>를 확인하세요.\n"
+            f"{resume_step}. 문제가 해결되고 Toss/DB가 일치한 뒤에만 "
+            "<code>/resume</code> 2단계 검증을 진행하세요.\n\n"
             "같은 원인은 10분 동안 반복 알림하지 않습니다."
         )
 
