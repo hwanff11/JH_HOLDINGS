@@ -43,22 +43,20 @@ class _BatchBuyPlan:
 
 
 def _v322_bot_commands() -> list[telebot.types.BotCommand]:
+    """Return only the commands needed for routine operator work.
+
+    Detailed analysis and incident commands remain registered and are documented in
+    /help, but hiding them from Telegram's first-level menu keeps daily operation
+    focused on the next safe action.
+    """
     return [
-        telebot.types.BotCommand("dashboard", "통합 대시보드"),
-        telebot.types.BotCommand("today", "오늘 주문 한번에 검토"),
-        telebot.types.BotCommand("portfolio", "목표비중·위험한도 현황"),
-        telebot.types.BotCommand("onboarding", "최초진입 50→75→100 매수"),
-        telebot.types.BotCommand("account", "토스 계좌 잔고"),
-        telebot.types.BotCommand("status", "종목별 목표·보유 상세"),
-        telebot.types.BotCommand("score", "TQQQ/SOXL 추가매수 판단"),
-        telebot.types.BotCommand("history", "최근 추가매수 점수"),
-        telebot.types.BotCommand("signal", "매수 주문 승인 대기"),
-        telebot.types.BotCommand("backtest", "최초진입 포함 백테스트"),
-        telebot.types.BotCommand("guide", "V3.2.2 전략·최초진입 설명"),
-        telebot.types.BotCommand("order", "미체결 주문 현황"),
-        telebot.types.BotCommand("errors", "최근 시스템 기록"),
-        telebot.types.BotCommand("ping", "봇 상태 확인"),
-        telebot.types.BotCommand("help", "메뉴 안내"),
+        telebot.types.BotCommand("dashboard", "오늘 상태와 해야 할 일"),
+        telebot.types.BotCommand("today", "오늘 주문 확인"),
+        telebot.types.BotCommand("account", "실제 토스 계좌 확인"),
+        telebot.types.BotCommand("portfolio", "목표비중·종목상세·점수"),
+        telebot.types.BotCommand("backtest", "과거검증 결과 확인"),
+        telebot.types.BotCommand("onboarding", "첫 투자 단계 확인"),
+        telebot.types.BotCommand("help", "전체 기능과 문제 대응"),
     ]
 
 
@@ -163,32 +161,27 @@ class V322TelegramBotApp(TelegramBotApp):
         markup = InlineKeyboardMarkup(row_width=2)
         markup.row(
             InlineKeyboardButton(
-                "🧾 오늘 주문 한번에 검토",
+                "🧾 오늘 주문 확인",
                 callback_data="ops|today",
             )
         )
-        for symbol in ALLOCATION_SYMBOLS:
-            buttons = [
-                InlineKeyboardButton(
-                    f"📊 {symbol} 보유/목표",
-                    callback_data=f"status|{symbol}",
-                )
-            ]
-            if symbol in self.config.enabled_symbols:
-                buttons.append(
-                    InlineKeyboardButton(
-                        f"🎯 {symbol} 추가매수 판단",
-                        callback_data=f"score|{symbol}",
-                    )
-                )
-            markup.row(*buttons)
         markup.row(
             InlineKeyboardButton(
-                "🛒 개별 매수 보기",
-                callback_data="ops|signals",
+                "💰 실제 계좌",
+                callback_data="ops|account",
             ),
             InlineKeyboardButton(
-                "📋 미체결 주문 보기",
+                "🪜 첫 투자 단계",
+                callback_data="ops|onboarding",
+            ),
+        )
+        markup.row(
+            InlineKeyboardButton(
+                "📊 목표·보유 상세",
+                callback_data="ops|portfolio",
+            ),
+            InlineKeyboardButton(
+                "📋 진행 중 주문",
                 callback_data="ops|orders",
             ),
         )
@@ -863,6 +856,21 @@ class V322TelegramBotApp(TelegramBotApp):
                 if action == "today":
                     self._send_today_order_review()
                     answer = "오늘 주문 상태를 확인했습니다."
+                elif action == "account":
+                    self._send_account()
+                    answer = "실제 계좌를 확인했습니다."
+                elif action == "portfolio":
+                    self._send(self._format_portfolio_message())
+                    answer = "목표와 보유 현황을 확인했습니다."
+                elif action == "onboarding":
+                    sender = getattr(self, "_send_onboarding_status", None)
+                    if sender is None:
+                        self._send(
+                            "ℹ️ 첫 투자 단계 기능이 현재 운영 프로그램에 연결되어 있지 않습니다."
+                        )
+                    else:
+                        sender()
+                    answer = "첫 투자 단계를 확인했습니다."
                 elif action == "signals":
                     signals = self.trading_service.active_signals()
                     if not signals:

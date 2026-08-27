@@ -950,7 +950,10 @@ class TelegramBotApp:
                         ]
                     )
                 safe_mode = self.repository.get_system_value("v322_portfolio_safe_mode") == "1"
-                lines.append(f"• <b>정합성</b> : {'🚨 SAFE_MODE' if safe_mode else '✅ 정상'}")
+                lines.append(
+                    f"• <b>계좌 대조</b> : "
+                    f"{'🚨 안전정지(SAFE_MODE)' if safe_mode else '✅ 정상'}"
+                )
                 lines.append("━━━━━━━━━━━━━━━━━━━━")
                 if self.portfolio_service is not None:
                     snapshot = self.portfolio_service.snapshot()
@@ -963,9 +966,9 @@ class TelegramBotApp:
                             "💰 <b>자산 요약</b>",
                             f"• 총자산 <code>{_money(equity)}</code> · 손익 <code>{_signed_money(profit)}</code>",
                             f"• 투자중 <code>{_money(invested)}</code> · 현금 <code>{_money(cash)}</code>",
-                            f"• 위험한도 <code>{_money(snapshot['risk_budget'])}</code>",
+                            f"• 투자한도(HWM75) <code>{_money(snapshot['risk_budget'])}</code>",
                             "",
-                            "📊 <b>목표 / 현재 배분</b>",
+                            "📊 <b>목표 / 현재 보유비중</b>",
                         ]
                     )
                     rows = {row["symbol"]: row for row in snapshot["rows"]}
@@ -977,7 +980,7 @@ class TelegramBotApp:
                             f"<code>{Decimal(str(row['core_weight'])) * 100:.2f}%</code> "
                             f"({_quantity(row['core_quantity'])}주)"
                         )
-                lines.extend(["", "🎯 <b>5% 가상 오버레이 입력</b>"])
+                lines.extend(["", "🎯 <b>추가매수 판단</b>"])
                 for result in results:
                     lines.append(
                         f"• <b>{result.symbol}</b> <code>{result.score.total}점</code> · "
@@ -987,13 +990,14 @@ class TelegramBotApp:
                 lines.extend(
                     [
                         "",
-                        f"📨 <b>위험증가 BUY 승인 대기</b> : <code>{pending_count}건</code>",
+                        f"📨 <b>매수 승인 대기</b> : <code>{pending_count}건</code>",
                     ]
                 )
                 lines.extend(
                     [
                         "━━━━━━━━━━━━━━━━━━━━",
-                        "ℹ️ 실제 Toss 계좌는 <code>/account</code>, 승인 대기는 <code>/signal</code>로 확인하세요.",
+                        "ℹ️ 평소에는 아래 ‘오늘 주문 확인’만 누르면 됩니다. "
+                        "개별 매수 승인은 <code>/signal</code>에서 자세히 볼 수 있습니다.",
                     ]
                 )
                 self._send("\n".join(lines), markup=self._dashboard_markup())
@@ -1214,24 +1218,29 @@ class TelegramBotApp:
             if not self._authorized_message(message):
                 return
             self._send(
-                "🤖 <b>[JDSS V3.2.2 운영 메뉴]</b>\n\n"
-                "<b>운영 확인</b>\n"
-                "• <code>/dashboard</code> — 핵심 상태 한눈에 보기\n"
-                "• <code>/portfolio</code> — 목표비중·현재비중·HWM75\n"
-                "• <code>/status [QQQ|TQQQ|SOXL]</code> — 종목별 allocation 원장\n"
-                "• <code>/account</code> — 실제 Toss 계좌 조회(주문 없음)\n"
-                "• <code>/order</code> / <code>/errors</code> — 주문·안전 기록\n\n"
-                "<b>전략 확인</b>\n"
-                "• <code>/score [TQQQ|SOXL]</code> — 5% 가상 오버레이 분석\n"
-                "• <code>/history [TQQQ|SOXL] [2~90]</code> — 점수 이력\n"
-                "• <code>/guide</code> — 전략 쉬운 설명\n\n"
-                "<b>승인·검증</b>\n"
-                "• <code>/signal</code> — 위험증가 BUY 승인 대기\n"
-                "• <code>/bt</code> / <code>/bt 100</code> / <code>/bt full</code>\n"
-                "• <code>/bt 2024-01-01 2025-12-31</code>\n\n"
-                "🛡️ <b>BUY는 1차 조건 검토 → 2차 60초 최종 승인</b>을 거칩니다. "
-                "위험을 줄이는 SELL은 자동입니다.\n"
-                "🧪 현재는 forced dry-run으로, 승인해도 실제 Toss BUY는 나가지 않습니다."
+                "🤖 <b>[JDSS 운영 도움말]</b>\n\n"
+                "<b>평소에는 네 가지만 사용합니다</b>\n"
+                "• <code>/dashboard</code> — 오늘 상태와 해야 할 일\n"
+                "• <code>/today</code> — 오늘 주문 확인\n"
+                "• <code>/account</code> — 실제 토스 계좌 조회\n"
+                "• <code>/onboarding</code> — 첫 투자 50% → 75% → 100% 단계\n\n"
+                "<b>문제가 생겼을 때</b>\n"
+                "• <code>/halt</code> — 신규 매수 즉시 중지\n"
+                "• <code>/order</code> — 진행 중인 주문 확인\n"
+                "• <code>/errors</code> — 최근 문제와 안전정지 기록\n"
+                "• <code>/ping</code> — 봇 작동 상태 확인\n"
+                "• <code>/resume</code> — 계좌 대조 후 신규 매수 재개\n\n"
+                "<b>자세히 보고 싶을 때</b>\n"
+                "• <code>/portfolio</code> — 목표·보유·투자한도\n"
+                "• <code>/status [QQQ|TQQQ|SOXL]</code> — 종목별 상세\n"
+                "• <code>/score [TQQQ|SOXL]</code> — 추가매수 판단\n"
+                "• <code>/history [TQQQ|SOXL] [2~90]</code> — 최근 판단 변화\n"
+                "• <code>/signal</code> — 개별 매수 승인(비상·상세용)\n"
+                "• <code>/guide</code> — 전략 쉬운 설명\n"
+                "• <code>/bt</code> / <code>/bt 100</code> / <code>/bt full</code> — 과거검증\n\n"
+                "🛡️ 매수는 <b>주문 검토 → 60초 안에 최종 승인</b>의 두 단계를 거칩니다. "
+                "위험을 줄이는 매도는 시스템이 먼저 처리합니다.\n"
+                "🧪 모의운용에서는 승인해도 실제 토스 주문이 전송되지 않습니다."
             )
 
         @bot.callback_query_handler(

@@ -1,28 +1,28 @@
-# JDSS LIVE-ARMED Commissioning & Incident Runbook
+# JDSS 실거래 준비 전환·사고 대응 가이드
 
-> 이 문서는 JDSS V3.2.2를 **실계좌에 연결하되 신규 BUY는 잠근 상태(LIVE-ARMED)** 로 기동하는 절차와 사고 대응 원칙을 정의합니다. 전략 수학·배분·HWM75·50→75→100 최초진입 규칙은 변경하지 않습니다.
+> 이 문서는 JDSS V3.2.2를 **실계좌에 연결하되 신규 매수는 잠근 상태**로 기동하는 절차와 사고 대응 원칙을 정의합니다. 전략 수학·목표비중·HWM75·50→75→100 첫 투자 규칙은 변경하지 않습니다.
 
 ## 1. 운영 상태 정의
 
-- **DRY-RUN**: 모의 원장/모의 주문. 실제 Toss 주문 제출 불가.
-- **LIVE-ARMED**: 실제 Toss 계좌와 별도 live 원장을 사용하지만 `operator_buy_halt=1`. 신규 BUY 제출 불가.
-- **LIVE-BUY-ENABLED**: LIVE-ARMED 상태에서 운영자가 Telegram으로 BUY 잠금을 명시적으로 해제한 상태. 그래도 각 BUY는 기존 2단계 승인 절차를 추가로 통과해야 함.
+- **모의운용(DRY-RUN)**: 모의 원장과 모의 주문 사용. 실제 Toss 주문 제출 불가.
+- **실계좌 연결·매수 잠금(LIVE-ARMED)**: 실제 Toss 계좌와 별도 실거래 원장을 사용하지만 `operator_buy_halt=1`. 신규 매수 제출 불가.
+- **실매수 허용(LIVE-BUY-ENABLED)**: 운영자가 Telegram으로 신규 매수 잠금을 명시적으로 해제한 상태. 그래도 각 매수는 기존 2단계 승인을 추가로 통과해야 함.
 
-`strategy.yaml`의 `portfolio.live_enabled: false`는 그대로 유지합니다. 일반/default 경로의 하드락은 닫힌 채로 두고, live는 `jdss-bot -> jd_holdings.runtime -> jd_holdings.live_bot`의 별도 commissioning 경로로만 진입합니다.
+`strategy.yaml`의 `portfolio.live_enabled: false`는 그대로 유지합니다. 일반 경로의 오작동 방지 잠금은 닫힌 채로 두고, 실거래는 `jdss-bot -> jd_holdings.runtime -> jd_holdings.live_bot`의 별도 준비 전환 경로로만 진입합니다.
 
 ## 2. 절대 원칙
 
-1. **dry-run DB를 live DB로 재사용하지 않는다.**
-2. 최초 live는 항상 **fresh 별도 `jdss-live.db`** 에서 시작한다.
-3. live 프로세스는 시작/재시작할 때마다 BUY HALT를 자동 재설정한다.
-4. 위험증가 BUY는 운영자 승인, 위험축소 SELL은 자동 원칙을 유지한다.
-5. 주문 결과가 불명확하면 blind retry보다 `UNKNOWN`/SAFE_MODE/reconciliation을 우선한다.
-6. broker side effect 가능 이후에는 과거 DB snapshot을 맹목적으로 복원하지 않는다.
-7. 배포 승인과 BUY 잠금 해제 승인은 서로 다른 행위다.
+1. **모의운용 DB를 실거래 DB로 재사용하지 않는다.**
+2. 최초 실거래는 항상 **새 별도 `jdss-live.db`** 에서 시작한다.
+3. 실거래 프로그램은 시작·재시작할 때마다 신규 매수 잠금을 자동으로 다시 건다.
+4. 위험을 늘리는 매수는 운영자 승인, 위험을 줄이는 매도는 자동 원칙을 유지한다.
+5. 주문 결과가 불명확하면 확인 없이 재전송하지 않고 `UNKNOWN(결과 확인 필요)`·안전정지·계좌 대조를 우선한다.
+6. 실제 주문 가능성이 생긴 뒤에는 과거 DB 백업을 맹목적으로 복원하지 않는다.
+7. 배포 승인과 신규 매수 잠금 해제 승인은 서로 다른 행위다.
 8. 최초 commissioning은 **JDSS 관리종목(QQQ/TQQQ/SOXL)이 청정한 실계좌**에서만 수행한다. 기존 개인 QQQ/TQQQ/SOXL 보유분은 자동 입양하거나 같은 계좌에서 공존시키지 않는다. **QQQ/TQQQ/SOXL 외 비관리 종목은 같은 계좌에 보유할 수 있으며 JDSS 원장·HWM75·자동 SELL·reconciliation 대상에서 제외한다.**
 9. **취소 요청 접수는 원주문 취소 완료가 아니다.** 원래 broker `orderId`의 상태가 `CANCELED`로 확인되기 전에는 취소 결과를 확정하지 않는다.
 
-## 3. 최초 LIVE-ARMED 전환 게이트
+## 3. 최초 실계좌 연결 전 필수검사
 
 하나라도 실패하면 전환하지 않습니다.
 

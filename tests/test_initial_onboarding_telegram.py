@@ -31,7 +31,7 @@ def _snapshot(**overrides):
 
 
 def test_help_message_exposes_onboarding_once():
-    base = "🤖 <b>[JDSS V3.2.2 운영 메뉴]</b>\n\n<b>승인·검증</b>\n• <code>/signal</code>"
+    base = "🤖 <b>[JDSS 운영 도움말]</b>\n\n<b>자세히 보고 싶을 때</b>\n• <code>/signal</code>"
     extended = _augment_help_message(base)
     assert "<code>/onboarding</code>" in extended
     assert extended.count("<code>/onboarding</code>") == 1

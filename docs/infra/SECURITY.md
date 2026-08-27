@@ -1,8 +1,10 @@
 # JH_HOLDINGS 보안·주문 안전 기준
 
-이 문서는 **비밀정보, Telegram 관리자 인증, BUY 승인, 주문 멱등성, SQLite 원장, Toss API, GitHub Actions, Oracle 배포와 live 잠금의 기술적 안전 불변식**을 소유합니다.
+이 문서는 **비밀정보, Telegram 관리자 인증, 매수 승인, 중복주문 방지, SQLite 원장, Toss API, GitHub Actions, Oracle 배포와 실거래 잠금의 기술적 안전 원칙**을 소유합니다.
 
-전략 숫자는 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 배포·live 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 따릅니다.
+전략 숫자는 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 배포·실거래 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 따릅니다.
+
+운영자가 먼저 기억할 원칙은 세 가지입니다: **매수는 2단계 승인, 결과가 불명확하면 재주문 금지, 계좌와 원장이 다르면 안전정지**입니다. 아래 영문은 실제 코드·장애코드 확인을 위해 필요한 경우에만 유지합니다.
 
 ## 1. 신뢰 경계
 
@@ -242,20 +244,26 @@ SAFE_MODE는 단 한 번의 정상 조회만으로 자동 해제하지 않습니
 - Oracle과 CI 설치는 검토된 `requirements.lock` 전이 의존성 제약을 적용해 같은 commit의 설치 결과가 임의로 변하지 않게 함
 - coverage 하한: 안전경계 테스트가 조용히 사라지는 것 방지
 
-## 20. live hard lock
+## 20. 실거래 오작동 방지 잠금
 
 현재 정확한 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
 
-live OFF 계약에서는 다음을 함께 유지합니다.
+일반 설정 경로에서는 다음 잠금을 계속 유지합니다.
 
 - `portfolio.live_enabled=false`
-- application live hard lock
-- Oracle forced dry-run
-- 빈 live confirmation
+- 일반 프로그램 경로의 실거래 차단
 
-배포 성공, read-only smoke 성공, 문서 체크리스트 존재만으로 live 준비 완료라고 판단하지 않습니다.
+승인된 별도 실거래 준비 전환 경로에서는 다음을 추가로 요구합니다.
 
-live 전환은 실제 계좌 preflight·주문 어댑터·회계·migration·복구 리허설과 별도 명시 승인을 요구합니다.
+- 별도 새 실거래 원장
+- 실거래 준비 완료 표시
+- 시작·재시작 시 신규 매수 잠금
+- 계좌·원장 대조
+- 신규 매수 2단계 승인
+
+배포 성공, 조회 기능 확인, 문서 체크리스트 존재만으로 실거래 준비 완료라고 판단하지 않습니다.
+
+실거래 준비 전환은 실제 계좌 사전점검·주문 연결부·회계·DB 이전·복구 연습과 별도 명시 승인을 요구합니다.
 
 ## 21. 변경 전 체크리스트
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import jd_holdings.infrastructure.telegram_bot as telegram_bot_module
+from jd_holdings.infrastructure.operational_safety_telegram import (
+    _operator_bot_commands,
+)
 from jd_holdings.infrastructure.telegram_bot import _guide_cards
 from jd_holdings.infrastructure.telegram_bot_v322 import (
     V322TelegramBotApp,
@@ -75,13 +78,34 @@ def test_final_runtime_uses_operator_friendly_terms_and_hides_sgov_menu_line():
 
 def test_v322_commands_avoid_internal_operator_jargon():
     commands = {item.command: item.description for item in _v322_bot_commands()}
-    assert commands["today"] == "오늘 주문 한번에 검토"
-    assert commands["portfolio"] == "목표비중·위험한도 현황"
-    assert commands["status"] == "종목별 목표·보유 상세"
-    assert commands["score"] == "TQQQ/SOXL 추가매수 판단"
-    assert commands["signal"] == "매수 주문 승인 대기"
+    assert commands == {
+        "dashboard": "오늘 상태와 해야 할 일",
+        "today": "오늘 주문 확인",
+        "account": "실제 토스 계좌 확인",
+        "portfolio": "목표비중·종목상세·점수",
+        "backtest": "과거검증 결과 확인",
+        "onboarding": "첫 투자 단계 확인",
+        "help": "전체 기능과 문제 대응",
+    }
     assert all("allocation" not in value for value in commands.values())
     assert all("오버레이" not in value for value in commands.values())
+
+
+def test_operator_menu_uses_confirmed_order_and_hides_resume():
+    commands = _operator_bot_commands()
+    assert [item.command for item in commands] == [
+        "dashboard",
+        "today",
+        "account",
+        "portfolio",
+        "backtest",
+        "onboarding",
+        "halt",
+        "help",
+    ]
+    assert commands[3].description == "목표비중·종목상세·점수"
+    assert commands[6].description == "긴급 신규 매수 중지"
+    assert all(item.command != "resume" for item in commands)
 
 
 def test_dashboard_buttons_are_actionable_and_plain_language():
@@ -98,15 +122,17 @@ def test_dashboard_buttons_are_actionable_and_plain_language():
         for row in payload["inline_keyboard"]
         for button in row
     ]
-    assert "🧾 오늘 주문 한번에 검토" in labels
-    assert "📊 QQQ 보유/목표" in labels
-    assert "📊 TQQQ 보유/목표" in labels
-    assert "🎯 TQQQ 추가매수 판단" in labels
-    assert "🎯 SOXL 추가매수 판단" in labels
-    assert "🛒 개별 매수 보기" in labels
-    assert "📋 미체결 주문 보기" in labels
+    assert labels == [
+        "🧾 오늘 주문 확인",
+        "💰 실제 계좌",
+        "🪜 첫 투자 단계",
+        "📊 목표·보유 상세",
+        "📋 진행 중 주문",
+    ]
     assert "ops|today" in callbacks
-    assert "ops|signals" in callbacks
+    assert "ops|account" in callbacks
+    assert "ops|onboarding" in callbacks
+    assert "ops|portfolio" in callbacks
     assert "ops|orders" in callbacks
     assert all("배분" not in label for label in labels)
     assert all("오버레이" not in label for label in labels)

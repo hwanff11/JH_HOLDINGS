@@ -16,13 +16,30 @@ RESUME_REVIEW_CALLBACK = "ops|resume|review"
 RESUME_CONFIRM_CALLBACK = "ops|resume|confirm"
 
 
+def _operator_bot_commands() -> list[telebot.types.BotCommand]:
+    """Return the exact first-level menu used by the live operator app."""
+    commands = _v322_bot_commands()
+    onboarding_index = next(
+        index for index, command in enumerate(commands) if command.command == "onboarding"
+    )
+    commands.insert(
+        onboarding_index + 1,
+        telebot.types.BotCommand("halt", "긴급 신규 매수 중지"),
+    )
+    return commands
+
+
 def _live_mode_operator_text(text: str, trading_mode: str) -> str:
     """Remove dry-run-only guidance once the explicitly commissioned runtime is live."""
     if trading_mode != "live":
         return text
     return text.replace(
         "• 실거래는 잠겨 있고 forced dry-run만 허용합니다.",
-        "• 실계좌는 LIVE 연결 상태이며 신규 BUY는 운영자 BUY 잠금과 2단계 승인으로 통제합니다.",
+        "• 실계좌가 연결되어 있으며 신규 매수는 운영자 잠금과 2단계 승인으로 통제합니다.",
+    ).replace(
+        "🧪 모의운용에서는 승인해도 실제 토스 주문이 전송되지 않습니다.",
+        "🔥 실거래에서는 신규 매수 잠금 해제와 2단계 승인을 모두 통과해야 "
+        "실제 토스 주문이 전송됩니다.",
     )
 
 
@@ -40,7 +57,7 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
         text = _live_mode_operator_text(text, self.settings.trading_mode)
         halted = self.repository.get_system_value("operator_buy_halt") == "1"
-        halt_state = "🚨 BUY 잠금" if halted else "✅ BUY 허용"
+        halt_state = "🚨 매수 잠금" if halted else "✅ 매수 가능"
         if "[JDSS V3.2.2 운영 대시보드]" in text:
             marker = "• <b>실거래</b> : 🔒 잠금"
             if marker in text:
@@ -52,13 +69,13 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
                 text = text.replace(
                     marker,
                     f"• <b>실계좌 연결</b> : {live_state}\n"
-                    f"• <b>신규 BUY</b> : {halt_state}",
+                    f"• <b>신규 매수</b> : {halt_state}",
                     1,
                 )
         if "[JH홀딩스 JDSS 봇 상태]" in text and self.settings.trading_mode == "live":
             text = text.replace(
                 "• <b>실주문 잠금</b> : 🟢 해제 (실거래 가능)",
-                f"• <b>실계좌 연결</b> : 🔥 LIVE\n• <b>신규 BUY</b> : {halt_state}",
+                f"• <b>실계좌 연결</b> : 🔥 실거래\n• <b>신규 매수</b> : {halt_state}",
                 1,
             )
         super()._send(text, markup=markup, chat_id=chat_id)
@@ -198,10 +215,7 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
                 )
 
     def run(self) -> None:
-        commands = _v322_bot_commands()
-        commands.insert(0, telebot.types.BotCommand("halt", "긴급 신규 BUY 차단"))
-        commands.insert(1, telebot.types.BotCommand("resume", "정합성 확인 후 BUY 재개"))
-        self.bot.set_my_commands(commands)
+        self.bot.set_my_commands(_operator_bot_commands())
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
         telegram_bot_module.LOGGER.info(
             "JDSS V3.2.2 Telegram polling 시작 (operator BUY halt enabled)"

@@ -1,6 +1,8 @@
 # Oracle 배포·검증·롤백 가이드
 
-이 문서는 **버전과 무관한 Oracle 배포 절차**만 소유합니다. 배포할 전략 계약은 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 source/runtime revision과 live 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
+이 문서는 **버전과 무관한 Oracle 배포 절차**만 소유합니다. 배포할 전략 계약은 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 저장소·운영 서버 버전과 실거래 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
+
+핵심은 **검증된 최신 버전만 배포하고, 실패하면 코드와 DB를 함께 이전 정상상태로 복구하며, 배포를 실거래 승인으로 해석하지 않는 것**입니다.
 
 완료된 일회성 migration, 오래된 SHA, Actions run ID는 이 절차 문서에 누적하지 않습니다.
 

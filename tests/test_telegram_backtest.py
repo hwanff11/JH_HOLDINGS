@@ -291,10 +291,12 @@ def test_telegram_guide_matches_current_contract():
 def test_v322_command_menu_exposes_onboarding_and_clear_buy_language():
     commands = {command.command: command.description for command in _v322_bot_commands()}
 
-    assert commands["onboarding"] == "최초진입 50→75→100 매수"
-    assert commands["signal"] == "매수 주문 승인 대기"
-    assert commands["backtest"] == "최초진입 포함 백테스트"
-    assert "최초진입" in commands["guide"]
+    assert commands["onboarding"] == "첫 투자 단계 확인"
+    assert commands["today"] == "오늘 주문 확인"
+    assert commands["portfolio"] == "목표비중·종목상세·점수"
+    assert commands["backtest"] == "과거검증 결과 확인"
+    assert "signal" not in commands
+    assert "resume" not in commands
 
 
 def test_buy_buttons_distinguish_review_from_order_submission():
