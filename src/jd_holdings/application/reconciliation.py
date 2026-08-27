@@ -6,9 +6,17 @@ from decimal import Decimal
 from jd_holdings.config import StrategyConfig
 from jd_holdings.core.enums import PositionState
 from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
+from jd_holdings.infrastructure.toss_client import receipt_from_order
 
 from .broker import Broker
-from .database import SQLiteRepository
+from .database import ALL_ORDER_STATUSES, SQLiteRepository
+
+CORE_ORDER_PURPOSES = {"CORE_REBALANCE_BUY", "CORE_REBALANCE_SELL"}
+TERMINAL_CORE_STATUSES = {"FILLED", "CANCELED", "REJECTED", "REPLACED"}
+
+
+class ReconciliationReceiptValidationError(RuntimeError):
+    """Broker order snapshot cannot be tied to the persisted core order."""
 
 
 def _missing_broker_id_issue(
@@ -23,6 +31,66 @@ def _missing_broker_id_issue(
     if not stranded:
         return None
     return f"{prefix}OPEN_ORDER_WITHOUT_BROKER_ID:{','.join(sorted(set(stranded)))}"
+
+
+def _validate_core_receipt(receipt, local: dict) -> None:
+    """Validate a broker order snapshot without importing OrderManager.
+
+    Reconciliation is imported by operational_safety, while OrderManager imports
+    operational_safety. Keeping this validation local avoids that circular dependency
+    while preserving the same broker identity checks used at the order boundary.
+    """
+    client_order_id = str(local["client_order_id"])
+    symbol = str(local["symbol"])
+    side = str(local["side"])
+    quantity = int(local["qty"])
+
+    if receipt.client_order_id != client_order_id:
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 clientOrderId가 저장 주문과 다릅니다"
+        )
+    if not receipt.broker_order_id:
+        raise ReconciliationReceiptValidationError("브로커 응답에 orderId가 없습니다")
+    if receipt.status.upper() not in ALL_ORDER_STATUSES:
+        raise ReconciliationReceiptValidationError(
+            f"브로커 응답 주문상태가 잘못됐습니다: {receipt.status}"
+        )
+    if receipt.quantity != quantity:
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 주문수량이 저장 주문과 다릅니다"
+        )
+    if not 0 <= receipt.filled_quantity <= quantity:
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 체결수량이 유효하지 않습니다"
+        )
+    if receipt.filled_quantity > 0 and (
+        receipt.average_fill_price is None or receipt.average_fill_price <= 0
+    ):
+        raise ReconciliationReceiptValidationError(
+            "체결된 주문의 평균체결가가 유효하지 않습니다"
+        )
+
+    raw = receipt.raw if isinstance(receipt.raw, dict) else {}
+    raw_client_id = raw.get("clientOrderId")
+    if raw_client_id is not None and str(raw_client_id) != client_order_id:
+        raise ReconciliationReceiptValidationError(
+            "브로커 raw clientOrderId가 저장 주문과 다릅니다"
+        )
+    raw_symbol = raw.get("symbol") or raw.get("stockCode")
+    if raw_symbol is not None and str(raw_symbol).upper() != symbol.upper():
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 종목이 저장 주문과 다릅니다"
+        )
+    raw_side = raw.get("side")
+    if raw_side is not None and str(raw_side).upper() != side.upper():
+        raise ReconciliationReceiptValidationError(
+            "브로커 응답 매매방향이 저장 주문과 다릅니다"
+        )
+    raw_quantity = raw.get("quantity")
+    if raw_quantity is not None and Decimal(str(raw_quantity)) != quantity:
+        raise ReconciliationReceiptValidationError(
+            "브로커 raw 주문수량이 저장 주문과 다릅니다"
+        )
 
 
 class ReconciliationService:
@@ -51,7 +119,160 @@ class ReconciliationService:
                     (symbol, underlyings[symbol], now),
                 )
 
+    def _enter_allocation_safe_mode(self, symbol: str, reason: str) -> None:
+        self.repository.set_system_value("v322_portfolio_safe_mode", "1")
+        if symbol not in self.config.enabled_symbols:
+            return
+        position = self.repository.get_position(symbol)
+        if position.state == PositionState.SAFE_MODE:
+            return
+        self.repository.transition_position(
+            symbol,
+            expected_state=position.state,
+            new_state=PositionState.SAFE_MODE,
+            reason_code=reason,
+            expected_version=position.version,
+        )
+
+    def _refresh_open_core_orders(self) -> dict[str, tuple[int, int]]:
+        """Apply broker-confirmed core fills before holdings reconciliation.
+
+        Returns newly applied BUY/SELL quantities per symbol. Those deltas provide a
+        one-cycle allowance when the order endpoint is ahead of the holdings endpoint.
+        """
+        recent: dict[str, list[int]] = {}
+        for local in list(self.repository.open_orders()):
+            purpose = str(local["purpose"])
+            if purpose not in CORE_ORDER_PURPOSES:
+                continue
+            broker_order_id = str(local.get("broker_order_id") or "")
+            if not broker_order_id:
+                continue
+            client_order_id = str(local["client_order_id"])
+            symbol = str(local["symbol"])
+            prior_filled = int(local.get("filled_qty") or 0)
+            try:
+                raw = self.broker.get_order(broker_order_id)
+                receipt = receipt_from_order(raw, client_order_id)
+                _validate_core_receipt(receipt, local)
+                self.repository.update_order(
+                    client_order_id,
+                    status=receipt.status,
+                    broker_order_id=receipt.broker_order_id,
+                    filled_qty=receipt.filled_quantity,
+                    average_fill_price=receipt.average_fill_price,
+                    raw=receipt.raw,
+                )
+                newly_filled = max(0, receipt.filled_quantity - prior_filled)
+                if receipt.filled_quantity > 0:
+                    self.repository.apply_core_fill(client_order_id)
+            except Exception as exc:
+                self._enter_allocation_safe_mode(symbol, "CORE_ORDER_REFRESH_FAILED")
+                self.repository.log_event(
+                    "SAFE_MODE",
+                    "CORE_ORDER_REFRESH_FAILED",
+                    "계좌 대조 전 열린 코어 주문 상태를 확정하지 못했습니다",
+                    symbol=symbol,
+                    context={
+                        "client_order_id": client_order_id,
+                        "broker_order_id": broker_order_id,
+                        "exception": type(exc).__name__,
+                    },
+                )
+                raise RuntimeError(
+                    "열린 코어 주문 상태 확인 실패로 SAFE_MODE입니다"
+                ) from exc
+
+            remaining = max(0, receipt.quantity - receipt.filled_quantity)
+            if receipt.status == "UNKNOWN":
+                self._enter_allocation_safe_mode(symbol, "CORE_ORDER_STATUS_UNKNOWN")
+                self.repository.log_event(
+                    "SAFE_MODE",
+                    "CORE_ORDER_STATUS_UNKNOWN",
+                    "계좌 대조 중 코어 주문 상태를 확정할 수 없습니다",
+                    symbol=symbol,
+                    context={
+                        "client_order_id": client_order_id,
+                        "broker_order_id": broker_order_id,
+                        "purpose": purpose,
+                        "filled_quantity": receipt.filled_quantity,
+                        "quantity": receipt.quantity,
+                    },
+                )
+                raise RuntimeError("코어 주문 상태 UNKNOWN으로 SAFE_MODE입니다")
+
+            if (
+                purpose == "CORE_REBALANCE_SELL"
+                and receipt.status in TERMINAL_CORE_STATUSES
+                and remaining > 0
+            ):
+                self._enter_allocation_safe_mode(symbol, "CORE_SELL_INCOMPLETE")
+                self.repository.log_event(
+                    "SAFE_MODE",
+                    "CORE_SELL_INCOMPLETE",
+                    "코어 위험축소 매도가 전량 완료되지 않았습니다",
+                    symbol=symbol,
+                    context={
+                        "client_order_id": client_order_id,
+                        "broker_order_id": broker_order_id,
+                        "status": receipt.status,
+                        "filled_quantity": receipt.filled_quantity,
+                        "quantity": receipt.quantity,
+                        "remaining_quantity": remaining,
+                    },
+                )
+                raise RuntimeError(
+                    f"{symbol} 위험축소가 미완료여서 SAFE_MODE입니다 "
+                    f"({receipt.filled_quantity}/{receipt.quantity}주, {receipt.status})"
+                )
+
+            if newly_filled > 0:
+                bucket = recent.setdefault(symbol, [0, 0])
+                if str(local["side"]).upper() == "BUY":
+                    bucket[0] += newly_filled
+                elif str(local["side"]).upper() == "SELL":
+                    bucket[1] += newly_filled
+        return {symbol: (values[0], values[1]) for symbol, values in recent.items()}
+
+    @staticmethod
+    def _core_fill_transition_explains_quantity(
+        expected_total: int,
+        broker_qty: Decimal,
+        local_orders: list[dict],
+        *,
+        recent_buy: int = 0,
+        recent_sell: int = 0,
+    ) -> bool:
+        """Allow only directionally possible short-lived order/holdings skew.
+
+        Two races are covered without hiding arbitrary account differences:
+        - holdings moves first while a local core order still has remaining quantity;
+        - order status moves first and JDSS applies the fill before holdings catches up.
+        """
+        if Decimal(expected_total) == broker_qty:
+            return False
+        remaining_buy = 0
+        remaining_sell = 0
+        for order in local_orders:
+            if str(order["purpose"]) not in CORE_ORDER_PURPOSES:
+                continue
+            if not order.get("broker_order_id") or str(order["status"]) == "UNKNOWN":
+                continue
+            remaining = max(0, int(order["qty"]) - int(order.get("filled_qty") or 0))
+            if remaining <= 0:
+                continue
+            if str(order["side"]).upper() == "BUY":
+                remaining_buy += remaining
+            elif str(order["side"]).upper() == "SELL":
+                remaining_sell += remaining
+        if not any((remaining_buy, remaining_sell, recent_buy, recent_sell)):
+            return False
+        lower = Decimal(expected_total - remaining_sell - recent_buy)
+        upper = Decimal(expected_total + remaining_buy + recent_sell)
+        return lower <= broker_qty <= upper
+
     def run(self) -> dict[str, list[str]]:
+        recent_fills = self._refresh_open_core_orders()
         try:
             raw_holdings = self.broker.get_holdings()
         except Exception as exc:
@@ -99,6 +320,19 @@ class ReconciliationService:
                 quantity_invalid = not broker_qty.is_finite() or broker_qty < 0
             expected_total = core_qty + booster_qty
             issues: list[str] = []
+            local_orders = self.repository.open_orders(symbol)
+            recent_buy, recent_sell = recent_fills.get(symbol, (0, 0))
+            transition_explains_qty = (
+                not quantity_invalid
+                and broker_qty == broker_qty.to_integral_value()
+                and self._core_fill_transition_explains_quantity(
+                    expected_total,
+                    broker_qty,
+                    local_orders,
+                    recent_buy=recent_buy,
+                    recent_sell=recent_sell,
+                )
+            )
 
             if symbol in duplicate_symbols:
                 issues.append("BROKER_DUPLICATE_HOLDING_ROWS")
@@ -113,18 +347,21 @@ class ReconciliationService:
                 issues.append(
                     f"V322_DIRECT_BOOSTER_STATE_PRESENT:{booster_state.value}:{booster_qty}"
                 )
-            if Decimal(expected_total) != broker_qty:
+            if Decimal(expected_total) != broker_qty and not transition_explains_qty:
                 issues.append(f"BROKER_DB_QTY_MISMATCH:{broker_qty}!={expected_total}")
-            if expected_total == 0 and broker_qty > 0:
+            if expected_total == 0 and broker_qty > 0 and not transition_explains_qty:
                 issues.append("UNMANAGED_PERSONAL_ALLOCATION_SYMBOL")
-            if expected_total > 0 and broker_qty == 0:
+            if expected_total > 0 and broker_qty == 0 and not transition_explains_qty:
                 issues.append("DB_POSITION_BROKER_EMPTY")
 
-            plan = self.repository.active_tp_plan(symbol) if symbol in self.config.enabled_symbols else None
+            plan = (
+                self.repository.active_tp_plan(symbol)
+                if symbol in self.config.enabled_symbols
+                else None
+            )
             if plan is not None:
                 issues.append("V322_DIRECT_TP_PLAN_PRESENT")
 
-            local_orders = self.repository.open_orders(symbol)
             unknown_orders = [
                 order for order in local_orders if str(order["status"]) == "UNKNOWN"
             ]
@@ -137,15 +374,27 @@ class ReconciliationService:
                 issues.append(missing_id)
             try:
                 broker_orders = self.broker.list_orders(status="OPEN", symbol=symbol)
-                local_broker_ids = {
-                    str(order["broker_order_id"])
+                local_by_broker_id = {
+                    str(order["broker_order_id"]): order
                     for order in local_orders
                     if order.get("broker_order_id")
                 }
+                local_broker_ids = set(local_by_broker_id)
                 broker_ids = {
-                    str(order["orderId"]) for order in broker_orders if order.get("orderId")
+                    str(order["orderId"])
+                    for order in broker_orders
+                    if order.get("orderId")
                 }
-                if local_broker_ids != broker_ids:
+                unexpected_broker_ids = broker_ids - local_broker_ids
+                missing_local_ids = local_broker_ids - broker_ids
+                transient_missing_ids = {
+                    order_id
+                    for order_id in missing_local_ids
+                    if str(local_by_broker_id[order_id]["purpose"])
+                    in CORE_ORDER_PURPOSES
+                    and str(local_by_broker_id[order_id]["status"]) != "UNKNOWN"
+                }
+                if unexpected_broker_ids or missing_local_ids - transient_missing_ids:
                     issues.append("BROKER_DB_OPEN_ORDER_MISMATCH")
             except Exception as exc:
                 issues.append(f"BROKER_OPEN_ORDER_LOOKUP_FAILED:{type(exc).__name__}")
@@ -200,7 +449,9 @@ class ReconciliationService:
             if missing_id:
                 issues.append(missing_id)
             try:
-                broker_orders = self.broker.list_orders(status="OPEN", symbol=cash_symbol)
+                broker_orders = self.broker.list_orders(
+                    status="OPEN", symbol=cash_symbol
+                )
                 local_ids = {
                     str(order["broker_order_id"])
                     for order in local_orders
@@ -215,7 +466,9 @@ class ReconciliationService:
                     issues.append("SGOV_BROKER_DB_OPEN_ORDER_MISMATCH")
             except Exception as exc:
                 issues.append(f"SGOV_OPEN_ORDER_LOOKUP_FAILED:{type(exc).__name__}")
-            self.repository.set_system_value("idle_cash_safe_mode", "1" if issues else "0")
+            self.repository.set_system_value(
+                "idle_cash_safe_mode", "1" if issues else "0"
+            )
             if issues:
                 result[cash_symbol] = issues
                 self.repository.log_event(
@@ -224,5 +477,7 @@ class ReconciliationService:
                     ";".join(issues),
                     symbol=cash_symbol,
                 )
-        self.repository.set_system_value("last_reconciliation", datetime.now(UTC).isoformat())
+        self.repository.set_system_value(
+            "last_reconciliation", datetime.now(UTC).isoformat()
+        )
         return result
