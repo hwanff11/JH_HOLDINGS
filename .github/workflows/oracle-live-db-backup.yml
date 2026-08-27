@@ -1,0 +1,104 @@
+name: Oracle Live DB Backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "35 21 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-live-db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: oracle-dry-run
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+
+      - name: Prepare pinned SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_jdss
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_jdss ~/.ssh/known_hosts
+
+      - name: Backup live ledger and verify integrity
+        id: backup
+        continue-on-error: true
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" \
+            "$SERVER_USER@$SERVER_HOST" \
+            "TARGET_DIR='$SERVER_TARGET_DIR' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          current="$(readlink -f "$TARGET_DIR/current")"
+          env_file="$TARGET_DIR/shared/.env"
+          test -d "$current"
+          test -f "$env_file"
+          set -a
+          source "$env_file"
+          set +a
+          test "${JDSS_TRADING_MODE:-}" = "live"
+          test "${JDSS_LIVE_CONFIRMATION:-}" = "ENABLE_JDSS_LIVE_ORDERS"
+          db_path="${JDSS_DB_PATH:-}"
+          test "$db_path" = "$TARGET_DIR/shared/data/jdss-live.db"
+          test -f "$db_path"
+          "$current/.venv/bin/python" "$current/scripts/backup_live_db.py" \
+            --source "$db_path" \
+            --backup-dir "$TARGET_DIR/shared/backups" \
+            --retention-days 90
+          REMOTE
+
+      - name: Open or update backup incident
+        if: steps.backup.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          title='[oracle-db-backup] JH_HOLDINGS live DB backup failed'
+          existing="$(gh issue list --state open --search 'in:title [oracle-db-backup] JH_HOLDINGS live DB backup failed' --json number --jq '.[0].number // empty')"
+          body="실거래 SQLite 일일 백업 또는 integrity_check가 실패했습니다. 신규 BUY 전 운영상태와 DB 무결성을 확인해야 합니다.\n\nActions run: $RUN_URL"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "$(printf '%b' "$body")"
+          else
+            gh issue create --title "$title" --body "$(printf '%b' "$body")"
+          fi
+          exit 1
+
+      - name: Close recovered backup incident
+        if: steps.backup.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          existing="$(gh issue list --state open --search 'in:title [oracle-db-backup] JH_HOLDINGS live DB backup failed' --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "실거래 DB 일일 백업과 integrity_check가 정상 복구되었습니다.\n\nActions run: $RUN_URL"
+            gh issue close "$existing" --reason completed
+          fi
