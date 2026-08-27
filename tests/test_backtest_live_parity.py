@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# V3.2.2 백테스트와 실운영의 핵심 계약이 서로 갈라지면 CI를 실패시킨다.
 import inspect
 from decimal import Decimal
 
