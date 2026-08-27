@@ -30,6 +30,13 @@ def _settings(tmp_path) -> RuntimeSettings:
 
 def _seed_pending_core_sell(tmp_path, config, broker):
     repository = SQLiteRepository(tmp_path / "sell-hardening.db", config)
+    repository.set_core_target(
+        "TQQQ",
+        active=True,
+        target_weight=Decimal("0.10"),
+        target_qty=2,
+        signal_trade_date=date(2026, 8, 26),
+    )
     manager = OrderManager(repository, broker, _settings(tmp_path))
     buy = OrderRequest(
         client_order_id="SEED-CORE-BUY",
