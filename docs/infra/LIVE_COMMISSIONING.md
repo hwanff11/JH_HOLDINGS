@@ -19,7 +19,7 @@
 5. 주문 결과가 불명확하면 blind retry보다 `UNKNOWN`/SAFE_MODE/reconciliation을 우선한다.
 6. broker side effect 가능 이후에는 과거 DB snapshot을 맹목적으로 복원하지 않는다.
 7. 배포 승인과 BUY 잠금 해제 승인은 서로 다른 행위다.
-8. 최초 commissioning은 **JDSS 전용 청정 실계좌**에서만 수행한다. 기존 개인 QQQ/TQQQ/SOXL 보유분을 자동 입양하거나 같은 계좌에서 공존시키지 않는다.
+8. 최초 commissioning은 **JDSS 관리종목(QQQ/TQQQ/SOXL)이 청정한 실계좌**에서만 수행한다. 기존 개인 QQQ/TQQQ/SOXL 보유분은 자동 입양하거나 같은 계좌에서 공존시키지 않는다. **QQQ/TQQQ/SOXL 외 비관리 종목은 같은 계좌에 보유할 수 있으며 JDSS 원장·HWM75·자동 SELL·reconciliation 대상에서 제외한다.**
 9. **취소 요청 접수는 원주문 취소 완료가 아니다.** 원래 broker `orderId`의 상태가 `CANCELED`로 확인되기 전에는 취소 결과를 확정하지 않는다.
 
 ## 3. 최초 LIVE-ARMED 전환 게이트
@@ -44,7 +44,7 @@
 - 파일시스템 사용률 < 90%
 - Toss read-only smoke PASS
 
-### Toss 실계좌 — 전용 청정계좌 계약
+### Toss 실계좌 — 관리종목 청정계좌 계약
 
 최초 commissioning 시 `RealAccountPreflight`가 다음을 확인합니다.
 
@@ -56,16 +56,25 @@
 
 기존에 개인적으로 보유하던 QQQ/TQQQ/SOXL이 있다면 **commissioning 전에 다른 증권계좌로 이동**하는 것을 production 운영방식으로 합니다. 기존 보유량을 JDSS 원장에 자동 등록하거나 baseline으로 차감하여 공존시키지 않습니다.
 
+QQQ/TQQQ/SOXL 외 종목은 같은 Toss 계좌에 보유할 수 있습니다. 이 비관리 종목은:
+
+- JDSS managed equity/HWM75 계산에 포함하지 않음
+- JDSS 목표수량·리밸런싱·자동 위험축소 SELL 대상이 아님
+- broker↔DB reconciliation 수량 비교 대상이 아님
+- 비관리 종목의 평가손익이 JDSS 위험예산을 늘리거나 줄이지 않음
+
+Toss의 USD `cashBuyingPower`는 계좌 공용 현금 기반 매수가능금액이므로 **JDSS 자산으로 합산하지 않고 실제 주문 가능한 유동성 상한으로만 사용**합니다. JDSS BUY 가능액은 `JDSS 원장 가용현금`, `HWM75 위험예산`, `broker cashBuyingPower` 중 가장 작은 값으로 제한합니다. 따라서 개인 현금이 많아도 JDSS가 HWM75 한도를 넘어 과대매수하지 않습니다. 반대로 비관리 종목 매수나 개인 주문이 계좌 현금을 사용해 `cashBuyingPower`가 줄면 JDSS BUY는 줄거나 차단될 수 있습니다.
+
 이 원칙을 두는 이유는 다음과 같습니다.
 
-- JDSS 자동 위험축소 SELL의 소유권 경계를 명확하게 유지
-- broker holdings와 JDSS 원장의 reconciliation을 단순하게 유지
-- 기존 개인 보유분의 평균단가·원가·수량을 JDSS HWM75 회계에 잘못 포함하는 위험 제거
-- 계좌 외부 수동매매가 JDSS 주문·원장으로 오인되는 위험 축소
+- JDSS 자동 위험축소 SELL의 소유권 경계를 QQQ/TQQQ/SOXL로 명확하게 유지
+- broker holdings와 JDSS 원장의 reconciliation을 관리종목으로 한정
+- 개인 비관리 종목의 평균단가·원가·평가손익을 JDSS HWM75 회계에 잘못 포함하는 위험 제거
+- 계좌의 추가 현금/비관리 자산 때문에 JDSS 위험예산이 부풀려지는 것을 방지
 
-따라서 preflight가 `REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:<SYMBOL>`을 반환하면 **우회하지 않고 commissioning을 중단**합니다. 기존 보유분 이동과 미체결 주문 정리가 완료된 뒤 fresh live DB로 다시 시작합니다.
+따라서 preflight가 `REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:<SYMBOL>`을 반환하면 **우회하지 않고 commissioning을 중단**합니다. 기존 관리종목 보유분 이동과 관리종목 미체결 주문 정리가 완료된 뒤 fresh live DB로 다시 시작합니다.
 
-commissioning 이후에도 동일 Toss 계좌의 QQQ/TQQQ/SOXL은 JDSS 외부에서 수동으로 별도 매매하지 않습니다. 불가피한 수동 조치가 발생하면 먼저 `/halt`하고 broker/DB reconciliation을 수행합니다.
+commissioning 이후에도 동일 Toss 계좌의 QQQ/TQQQ/SOXL은 JDSS 외부에서 수동으로 별도 매매하지 않습니다. 불가피한 수동 조치가 발생하면 먼저 `/halt`하고 broker/DB reconciliation을 수행합니다. 비관리 종목의 개인 매매는 허용하지만 JDSS 주문 검토·실행 시점에는 USD `cashBuyingPower`가 JDSS 주문에 충분한지 다시 확인합니다.
 
 ### Live 원장
 
@@ -106,7 +115,7 @@ owner-only ChatOps 제목:
 
 이 과정은 실제 BUY 주문을 자동 제출하지 않습니다.
 
-실계좌 preflight가 기존 관리대상 보유나 미체결 주문을 발견하면 candidate live DB를 production live 원장으로 승격하지 않고 fail-closed 종료하며, 기존 forced dry-run 환경으로 복구합니다.
+실계좌 preflight가 기존 관리대상 보유나 관리대상 미체결 주문을 발견하면 candidate live DB를 production live 원장으로 승격하지 않고 fail-closed 종료하며, 기존 forced dry-run 환경으로 복구합니다. 비관리 종목 보유나 비관리 종목 미체결 주문만으로는 commissioning을 차단하지 않습니다. 단, 계좌 공용 USD `cashBuyingPower`가 전략 초기자본보다 작으면 commissioning은 차단합니다.
 
 ## 5. Systemd / DB 경계
 
@@ -212,7 +221,7 @@ BUY 잠금이 풀려도 주문이 자동 발생하지 않습니다. 각 BUY는 �
 - 부분체결은 실제 체결분만 원장 반영
 - 잔여 BUY는 새로운 승인 필요
 
-실계좌 canary 주문은 자동으로 실행하지 않습니다. 위 계약은 테스트·dry-run으로 먼저 검증하고, 실제 broker write-path의 최종 확인은 전용 청정계좌의 LIVE-ARMED 상태에서 별도 명시적 commissioning으로 수행합니다.
+실계좌 canary 주문은 자동으로 실행하지 않습니다. 위 계약은 테스트·dry-run으로 먼저 검증하고, 실제 broker write-path의 최종 확인은 **QQQ/TQQQ/SOXL 관리종목 청정 상태**의 LIVE-ARMED 계좌에서 별도 명시적 commissioning으로 수행합니다. 비관리 종목의 존재는 이 write-path 소유권 경계를 변경하지 않습니다.
 
 ## 9. 배포 / rollback 원칙
 
@@ -298,13 +307,15 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 - 서버 측 BUY HALT 유지
 - 활성 승인 취소/TTL 만료 확인
 
-### JDSS 전용계좌에 외부/수동 관리종목 거래가 생긴 경우
+### JDSS 관리종목에 외부/수동 거래가 생긴 경우
 
 1. `/halt`
 2. QQQ/TQQQ/SOXL의 실제 보유·미체결 확인
 3. 임의로 DB 수량을 맞추거나 주문을 재전송하지 않음
 4. broker/DB reconciliation
 5. 원인과 실제 소유수량이 증명될 때까지 BUY 재개 금지
+
+비관리 종목의 개인 거래는 이 사고절차 대상이 아닙니다. 다만 비관리 종목 주문으로 USD `cashBuyingPower`가 줄어 JDSS 주문이 거부되면 개인 주문/현금 사용량을 확인하고, JDSS 주문을 임의 축소·재전송하기보다 최신 승인 흐름에서 다시 검토합니다.
 
 ## 12. BUY 해제 전 최종 체크리스트
 
@@ -313,6 +324,8 @@ broker side effect 가능 이후에는 과거 DB를 자동 복원해 현재 brok
 - Oracle health PASS
 - 최초 commissioning이라면 QQQ/TQQQ/SOXL 기존 보유 0
 - QQQ/TQQQ/SOXL 외부 미체결 주문 0
+- 비관리 종목은 존재 가능하며 JDSS 원장/HWM/SELL/reconciliation 대상에서 제외됨을 확인
+- USD `cashBuyingPower`가 필요한 JDSS 주문/초기자본에 충분함을 확인
 - `JDSS_TRADING_MODE=live`
 - live DB 경로 확인
 - `live_commissioned=1`
