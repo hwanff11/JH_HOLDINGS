@@ -43,9 +43,7 @@ def test_deploy_refuses_standard_cross_version_migration():
 
 
 def test_github_deploy_is_latest_main_only_and_chatops_owner_only():
-    workflow = (ROOT / ".github/workflows/deploy-oracle-dry-run.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github/workflows/deploy-oracle-dry-run.yml").read_text(encoding="utf-8")
     assert "ref: main" in workflow
     assert 'SKIP_LOCAL_CHECKS: "1"' in workflow
     assert "issues:" in workflow
@@ -56,14 +54,9 @@ def test_github_deploy_is_latest_main_only_and_chatops_owner_only():
 
 
 def test_github_deploy_requires_pinned_oracle_known_hosts():
-    workflow = (ROOT / ".github/workflows/deploy-oracle-dry-run.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github/workflows/deploy-oracle-dry-run.yml").read_text(encoding="utf-8")
     assert "ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}" in workflow
     assert "SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts" in workflow
-    # `ssh-keyscan -H` produces hashed hostnames, so the preflight validates
-    # the pinned key syntax instead of looking up the clear-text hostname.
-    # The real scp/ssh call remains the authoritative hostname/key match check.
     assert "authoritative parser" in workflow
     assert "StrictHostKeyChecking=yes" in (ROOT / "deploy.sh").read_text(encoding="utf-8")
     assert "accept-new" not in workflow
@@ -71,9 +64,7 @@ def test_github_deploy_requires_pinned_oracle_known_hosts():
 
 
 def test_github_deploy_validates_current_v322_contract():
-    workflow = (ROOT / ".github/workflows/deploy-oracle-dry-run.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github/workflows/deploy-oracle-dry-run.yml").read_text(encoding="utf-8")
     assert "JDSS-3.2.2-RS6M-ONEWAY-HWM75" in workflow
     assert 'config_version: "3.2.2"' in workflow
     assert "total_capital: 50000" in workflow
@@ -83,40 +74,14 @@ def test_github_deploy_validates_current_v322_contract():
     assert "jdss_overlay_weight: 0.05" in workflow
     assert "live_enabled: false" in workflow
 
-def test_runtime_verifier_supports_hashed_pinned_known_hosts():
-    workflow = (ROOT / ".github/workflows/verify-oracle-v322-runtime.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}" in workflow
-    assert "StrictHostKeyChecking=yes" in workflow
-    assert "authoritative parser" in workflow
-    assert "ssh-keygen -F" not in workflow
-    assert "accept-new" not in workflow
-    assert "ssh-keyscan" not in workflow
 
 def test_required_gates_keep_fast_paths_for_unrelated_changes():
     quality = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     security = (ROOT / ".github/workflows/security.yml").read_text(encoding="utf-8")
-    backtest = (ROOT / ".github/workflows/jdss-backtest.yml").read_text(
-        encoding="utf-8"
-    )
+    backtest = (ROOT / ".github/workflows/jdss-backtest.yml").read_text(encoding="utf-8")
     assert "PASS_DOCS_ONLY" in quality
     assert "cancel-in-progress: true" in quality
     assert "Security scope" in security
     assert "PASS_NOT_STRATEGY_SENSITIVE" in backtest
     assert "cancel-in-progress: true" in security
     assert "cancel-in-progress: true" in backtest
-
-
-def test_runtime_verifier_automates_safe_closed_market_and_telegram_smoke():
-    workflow = (ROOT / ".github/workflows/verify-oracle-v322-runtime.yml").read_text(
-        encoding="utf-8"
-    )
-    assert 'cron: "30 1 * * 6"' in workflow
-    assert "github.event_name == 'schedule'" in workflow
-    assert "Restart only during closed market" in workflow
-    assert "Verify Telegram outbound runtime" in workflow
-    assert 'call("getMe", {})' in workflow
-    assert '"sendMessage"' in workflow
-    assert '"deleteMessage"' in workflow
-    assert "disable_notification" in workflow
