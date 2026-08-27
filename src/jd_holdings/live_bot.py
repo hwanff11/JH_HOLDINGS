@@ -5,10 +5,7 @@ import logging
 from jd_holdings.application.analysis_service import AnalysisService
 from jd_holdings.application.database import SQLiteRepository
 from jd_holdings.application.live_commissioning import arm_live_startup_buy_halt
-from jd_holdings.application.live_runtime_services import (
-    LiveAllocationTradingService,
-    LiveInitialOnboardingPortfolioService,
-)
+from jd_holdings.application.live_runtime_services import LiveAllocationTradingService
 from jd_holdings.application.order_manager import OrderManager
 from jd_holdings.application.order_monitor import OrderMonitor
 from jd_holdings.application.position_manager import PositionManager
@@ -16,11 +13,12 @@ from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
+from jd_holdings.infrastructure.live_runtime_hardening import (
+    HardenedLiveInitialOnboardingPortfolioService,
+    HardenedOperationalSafetyTelegramBotApp,
+)
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
-from jd_holdings.infrastructure.operational_safety_telegram import (
-    OperationalSafetyTelegramBotApp,
-)
 from jd_holdings.infrastructure.toss_client import TossClient
 from jd_holdings.settings import load_runtime_settings
 
@@ -76,7 +74,7 @@ def main() -> None:
         position_manager,
         tp_manager,
     )
-    portfolio_service = LiveInitialOnboardingPortfolioService(
+    portfolio_service = HardenedLiveInitialOnboardingPortfolioService(
         config,
         repository,
         broker,
@@ -92,7 +90,7 @@ def main() -> None:
         logging.getLogger(__name__).error("live 시작 정합성 검사 실패: %s", mismatches)
 
     analysis_service = AnalysisService(config, repository, data_source, market_clock)
-    app = OperationalSafetyTelegramBotApp(
+    app = HardenedOperationalSafetyTelegramBotApp(
         config,
         settings,
         repository,
