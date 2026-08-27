@@ -3,7 +3,10 @@ name: Deploy Oracle Live Armed
 on:
   workflow_dispatch:
   issues:
-    types: [opened]
+    # `opened` is the normal ChatOps path. `reopened` lets an authorized
+    # operator safely retry the same deployment request after a skipped or
+    # transiently failed issue event without requiring workflow_dispatch.
+    types: [opened, reopened]
 
 permissions:
   contents: read
