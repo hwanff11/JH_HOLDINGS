@@ -40,6 +40,19 @@ jobs:
           git fetch origin main --no-tags
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
           echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          runtime_ref="$(sed -nE 's/^- Oracle runtime 기능 revision: \*\*`([0-9a-f]{40})`\*\*$/\1/p' CURRENT_WORK.md | head -n1)"
+          test -n "$runtime_ref"
+          git cat-file -e "${runtime_ref}^{commit}"
+          git merge-base --is-ancestor "$runtime_ref" HEAD
+          runtime_changes="$(git diff --name-only "$runtime_ref"..HEAD -- src strategy.yaml pyproject.toml requirements.lock systemd deploy.sh)"
+          if [[ -n "$runtime_changes" ]]; then
+            echo "::error::Oracle runtime 이후 runtime-sensitive 변경이 main에 존재합니다"
+            printf '%s\n' "$runtime_changes"
+            exit 1
+          fi
+          echo "runtime_ref=$runtime_ref" >> "$GITHUB_OUTPUT"
+
           grep -q 'JDSS-3.2.2-RS6M-ONEWAY-HWM75' strategy.yaml
           grep -q 'config_version: "3.2.2"' strategy.yaml
           grep -q 'total_capital: 50000' strategy.yaml
@@ -118,7 +131,7 @@ jobs:
           SERVER_HOST: ${{ secrets.ORACLE_HOST }}
           SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
           SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
-          EXPECTED_SHA: ${{ github.event_name == 'schedule' && '' || steps.ref.outputs.ref }}
+          EXPECTED_SHA: ${{ steps.ref.outputs.runtime_ref }}
           EXPECTED_MODE: ${{ steps.runtime.outputs.mode }}
         run: |
           set -Eeuo pipefail
