@@ -77,6 +77,37 @@ def test_reconciliation_applies_completed_sell_before_holdings_compare(tmp_path,
     assert repository.get_system_value("v322_portfolio_safe_mode") != "1"
 
 
+def test_reconciliation_allows_holdings_lag_after_order_fill(tmp_path, config):
+    class HoldingsLagBroker(DryRunBroker):
+        return_stale_holding_once = False
+
+        def get_holdings(self, symbol=None):
+            if self.return_stale_holding_once:
+                self.return_stale_holding_once = False
+                if symbol is None or symbol.upper() == "TQQQ":
+                    return [{"symbol": "TQQQ", "quantity": "2"}]
+            return super().get_holdings(symbol)
+
+    broker = HoldingsLagBroker(
+        {"QQQ": Decimal("500"), "TQQQ": Decimal("100"), "SOXL": Decimal("50")},
+        buying_power=Decimal("50000"),
+    )
+    repository, sell, _receipt = _seed_pending_core_sell(tmp_path, config, broker)
+    broker.set_price("TQQQ", Decimal("102"))
+    broker.fill_open_orders("TQQQ")
+    broker.return_stale_holding_once = True
+
+    first = ReconciliationService(config, repository, broker).run()
+
+    assert first == {}
+    assert repository.get_core_position("TQQQ")["qty"] == 0
+    assert repository.get_order_by_client_id(sell.client_order_id)["status"] == "FILLED"
+    assert repository.get_system_value("v322_portfolio_safe_mode") != "1"
+
+    second = ReconciliationService(config, repository, broker).run()
+    assert second == {}
+
+
 def test_reconciliation_defers_fill_race_within_open_sell_envelope(tmp_path, config):
     class FillAfterRefreshBroker(DryRunBroker):
         fill_during_holdings = False
@@ -107,6 +138,25 @@ def test_reconciliation_defers_fill_race_within_open_sell_envelope(tmp_path, con
     assert second == {}
     assert repository.get_core_position("TQQQ")["qty"] == 0
     assert repository.get_order_by_client_id(sell.client_order_id)["status"] == "FILLED"
+
+
+def test_reconciliation_does_not_hide_difference_outside_open_sell_envelope(
+    tmp_path, config
+):
+    broker = DryRunBroker(
+        {"QQQ": Decimal("500"), "TQQQ": Decimal("100"), "SOXL": Decimal("50")},
+        buying_power=Decimal("50000"),
+    )
+    repository, _sell, _receipt = _seed_pending_core_sell(tmp_path, config, broker)
+    broker.holdings["TQQQ"] = {
+        "quantity": 10,
+        "averagePurchasePrice": Decimal("100"),
+    }
+
+    issues = ReconciliationService(config, repository, broker).run()
+
+    assert "BROKER_DB_QTY_MISMATCH:10!=2" in issues["TQQQ"]
+    assert repository.get_system_value("v322_portfolio_safe_mode") == "1"
 
 
 def test_live_portfolio_skips_toss_maintenance_without_touching_dependencies():
