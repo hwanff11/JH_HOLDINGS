@@ -5,7 +5,8 @@ import os
 import re
 import threading
 import time
-from decimal import Decimal
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import requests
@@ -19,6 +20,8 @@ ORDER_SIDES = {"BUY", "SELL"}
 ORDER_TYPES = {"LIMIT", "MARKET"}
 AUTH_MAX_ATTEMPTS = 3
 SAFE_AUTH_REPLAY_METHODS = {"GET", "HEAD", "OPTIONS"}
+DEFAULT_PRICE_MAX_AGE_SECONDS = 300
+MAX_PRICE_FUTURE_SKEW_SECONDS = 120
 
 
 class TossApiError(RuntimeError):
@@ -51,12 +54,16 @@ class TossClient:
         account_seq: str | None = None,
         timeout: tuple[float, float] = (5.0, 15.0),
         session: requests.Session | None = None,
+        price_max_age_seconds: int = DEFAULT_PRICE_MAX_AGE_SECONDS,
     ) -> None:
         self.client_id = client_id or os.getenv("TOSS_APP_KEY")
         self.client_secret = client_secret or os.getenv("TOSS_APP_SECRET")
         self.account_seq = account_seq or os.getenv("TOSS_ACCOUNT_SEQ", "1")
         self.timeout = timeout
         self.session = session or requests.Session()
+        if price_max_age_seconds <= 0:
+            raise ValueError("price_max_age_seconds는 양수여야 합니다")
+        self.price_max_age_seconds = price_max_age_seconds
         self._access_token: str | None = None
         self._token_lock = threading.Lock()
 
@@ -269,10 +276,48 @@ class TossClient:
         }
 
     def get_price(self, symbol: str) -> Decimal:
-        prices = self.get_prices([symbol.upper()])
-        if symbol.upper() not in prices:
+        normalized_symbol = symbol.upper()
+        payload = self._request("GET", "/api/v1/prices", params={"symbols": normalized_symbol})
+        items = payload.get("result", [])
+        if not isinstance(items, list):
+            raise TossApiError("현재가 응답 형식이 올바르지 않습니다")
+        item = next(
+            (
+                value
+                for value in items
+                if isinstance(value, dict)
+                and str(value.get("symbol") or "").upper() == normalized_symbol
+            ),
+            None,
+        )
+        if item is None:
             raise TossApiError(f"현재가 응답에 {symbol.upper()}이 없습니다")
-        return prices[symbol.upper()]
+        raw_timestamp = item.get("timestamp")
+        if not raw_timestamp:
+            raise TossApiError(f"현재가 응답에 {normalized_symbol} 시각이 없습니다")
+        try:
+            observed_at = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise TossApiError(
+                f"현재가 응답의 {normalized_symbol} 시각 형식이 올바르지 않습니다"
+            ) from exc
+        if observed_at.tzinfo is None:
+            raise TossApiError(f"현재가 응답의 {normalized_symbol} 시각에 시간대가 없습니다")
+        age_seconds = (datetime.now(UTC) - observed_at.astimezone(UTC)).total_seconds()
+        if age_seconds < -MAX_PRICE_FUTURE_SKEW_SECONDS:
+            raise TossApiError(f"현재가 응답의 {normalized_symbol} 시각이 미래입니다")
+        if age_seconds > self.price_max_age_seconds:
+            raise TossApiError(
+                f"{normalized_symbol} 현재가가 {self.price_max_age_seconds}초보다 오래되어 "
+                "주문 계산을 중단합니다"
+            )
+        try:
+            price = Decimal(str(item["lastPrice"]))
+        except (KeyError, InvalidOperation, ValueError) as exc:
+            raise TossApiError(f"{normalized_symbol} 현재가 응답이 올바르지 않습니다") from exc
+        if not price.is_finite() or price <= 0:
+            raise TossApiError(f"{normalized_symbol} 현재가가 양수 유한값이 아닙니다")
+        return price
 
     def get_candles(
         self,

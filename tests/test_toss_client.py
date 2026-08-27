@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -58,7 +59,17 @@ class FakeSession:
         if url.endswith("/api/v1/buying-power"):
             return FakeResponse({"result": {"cashBuyingPower": "50000"}})
         if url.endswith("/api/v1/prices"):
-            return FakeResponse({"result": [{"symbol": "TQQQ", "lastPrice": "100.25"}]})
+            return FakeResponse(
+                {
+                    "result": [
+                        {
+                            "symbol": "TQQQ",
+                            "lastPrice": "100.25",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    ]
+                }
+            )
         if url.endswith("/api/v1/orderbook"):
             return FakeResponse(
                 {
@@ -360,7 +371,15 @@ def test_read_401_refreshes_token_and_replays_only_read_request():
                         status_code=401,
                     )
                 return FakeResponse(
-                    {"result": [{"symbol": "TQQQ", "lastPrice": "100.25"}]}
+                    {
+                        "result": [
+                            {
+                                "symbol": "TQQQ",
+                                "lastPrice": "100.25",
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            }
+                        ]
+                    }
                 )
             return super().request(method, url, **kwargs)
 
@@ -372,6 +391,32 @@ def test_read_401_refreshes_token_and_replays_only_read_request():
     assert client.get_price("TQQQ") == Decimal("100.25")
     assert session.auth_calls == 2
     assert session.price_calls == 2
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "message"),
+    [
+        (None, "시각이 없습니다"),
+        ("not-a-date", "시각 형식"),
+        ((datetime.now(UTC) - timedelta(minutes=6)).isoformat(), "오래되어"),
+        ((datetime.now(UTC) + timedelta(minutes=3)).isoformat(), "미래"),
+    ],
+)
+def test_current_price_rejects_missing_stale_or_future_timestamp(timestamp, message):
+    class PriceSession(FakeSession):
+        def request(self, method, url, **kwargs):
+            if url.endswith("/api/v1/prices"):
+                item = {"symbol": "TQQQ", "lastPrice": "100.25"}
+                if timestamp is not None:
+                    item["timestamp"] = timestamp
+                return FakeResponse({"result": [item]})
+            return super().request(method, url, **kwargs)
+
+    client = TossClient(
+        client_id="client", client_secret="secret", account_seq="1", session=PriceSession()
+    )
+    with pytest.raises(TossApiError, match=message):
+        client.get_price("TQQQ")
 
 
 def test_write_401_refreshes_token_but_never_replays_order_automatically():

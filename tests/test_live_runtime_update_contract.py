@@ -28,7 +28,10 @@ def test_live_update_preserves_environment_and_existing_live_ledger():
     assert 'Environment=JDSS_DB_PATH=$live_db' in script
     assert 'backup_path="$shared_dir/backups/jdss-live-' in script
     assert "source.backup(target)" in script
-    assert 'cmp -s "$previous_current/strategy.yaml"' in script
+    assert "LIVE_STRATEGY_CONTRACT=PASS" in script
+    assert '"regular": False' in script
+    assert '"regular": True' in script
+    assert "previous_without_sessions != candidate_without_sessions" in script
     assert '"$previous_current/src/jd_holdings/application/database.py"' in script
     assert "DB 스키마 코드 변경은 금지" in script
 

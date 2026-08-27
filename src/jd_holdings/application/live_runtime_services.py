@@ -29,14 +29,8 @@ class LiveInitialOnboardingPortfolioService(InitialOnboardingPortfolioService):
     all broker writes retain live confirmation, BUY halt, idempotency and validation.
     """
 
-    def run_allocation(self, now: datetime | None = None):
-        if self.trading_mode != "live":
-            return super().run_allocation(now)
-        self.trading_mode = "dry_run"
-        try:
-            return super().run_allocation(now)
-        finally:
-            self.trading_mode = "live"
+    def _explicit_live_runtime_enabled(self) -> bool:
+        return self.trading_mode == "live"
 
 
 class LiveAllocationTradingService(AllocationTradingService):

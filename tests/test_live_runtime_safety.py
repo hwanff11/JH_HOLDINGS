@@ -78,6 +78,7 @@ def _approve(trading, signal_id):
 
 def test_live_service_cannot_cross_broker_boundary_while_buy_halted(tmp_path, config):
     repository, broker, trading, signal_id = _build_live_buy(tmp_path, config)
+    repository.set_system_value("live_commissioned", "1")
     repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
     quote, now = _approve(trading, signal_id)
 
@@ -95,6 +96,7 @@ def test_live_service_cannot_cross_broker_boundary_while_buy_halted(tmp_path, co
 
 def test_live_service_submits_only_after_operator_halt_is_released(tmp_path, config):
     repository, broker, trading, signal_id = _build_live_buy(tmp_path, config)
+    repository.set_system_value("live_commissioned", "1")
     repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
     quote, now = _approve(trading, signal_id)
 
@@ -107,6 +109,21 @@ def test_live_service_submits_only_after_operator_halt_is_released(tmp_path, con
     assert receipt.status == "FILLED"
     assert broker.sequence == 1
     assert repository.get_core_position("QQQ")["qty"] == quote.quantity
+
+
+def test_live_service_rejects_uncommissioned_or_missing_buy_halt_state(tmp_path, config):
+    repository, broker, trading, signal_id = _build_live_buy(tmp_path, config)
+    quote, now = _approve(trading, signal_id)
+
+    with pytest.raises(RuntimeError, match="준비 전환"):
+        trading.execute(quote.execution_approval_id, quote.execution_token, now=now)
+    assert broker.orders == {}
+
+    repository.set_system_value("live_commissioned", "1")
+    quote, now = _approve(trading, signal_id)
+    with pytest.raises(RuntimeError, match="잠금 상태"):
+        trading.execute(quote.execution_approval_id, quote.execution_token, now=now)
+    assert broker.orders == {}
 
 
 def test_telegram_resume_uses_two_distinct_confirmation_buttons():

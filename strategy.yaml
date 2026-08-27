@@ -34,7 +34,7 @@ global:
   entry_max_chase_pct: 0.05
   buy_limit_buffer: 0.005
   trading_sessions:
-    regular: false
+    regular: true
     after_hours: true
     pre_market: true
   review_token_ttl_minutes: 480

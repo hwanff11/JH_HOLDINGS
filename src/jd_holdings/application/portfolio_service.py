@@ -95,7 +95,10 @@ class PortfolioService:
     def run_allocation(self, now: datetime | None = None) -> PortfolioRunResult | None:
         if not self.config.portfolio.enabled:
             return None
-        if self.trading_mode == "live" or self.config.portfolio.live_enabled:
+        if (
+            self.trading_mode == "live"
+            and not self._explicit_live_runtime_enabled()
+        ) or self.config.portfolio.live_enabled:
             raise RuntimeError("JDSS V3.2.2는 live 모드가 잠겨 있습니다")
         current = now or datetime.now(UTC)
         if current.tzinfo is None:
@@ -315,6 +318,10 @@ class PortfolioService:
             signals=tuple(dict.fromkeys(signal_ids)),
             events=tuple(events),
         )
+
+    def _explicit_live_runtime_enabled(self) -> bool:
+        """Only the commissioned live adapter may enter the allocation engine."""
+        return False
 
     def run_month_end(self, now: datetime | None = None) -> PortfolioRunResult | None:
         """Backward-compatible scheduler entry point; V3.2.2 evaluates each completed session."""
