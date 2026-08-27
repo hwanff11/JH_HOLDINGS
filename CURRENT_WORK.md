@@ -158,9 +158,23 @@ merge/runtime revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
 
 최종 preflight는 당시 실계좌의 기존 **SOXL 보유**를 감지해 `REAL_ACCOUNT_MANAGED_SYMBOL_PRESENT:SOXL`로 의도대로 fail-closed 중단했습니다. 이후 외부 Health Watch run **32950205268**로 Oracle이 정상 forced dry-run에 복구된 것을 독립 확인했습니다.
 
+### 비관리 종목 계좌 공존 경계 점검
+
+실계좌에 QQQ/TQQQ/SOXL 외 개인 종목이 함께 있는 경우를 production 코드 기준으로 재점검했습니다.
+
+- `RealAccountPreflight`와 최초 live commissioning은 **QQQ/TQQQ/SOXL 보유·미체결만** 관리대상으로 검사
+- reconciliation은 broker holdings에서 **QQQ/TQQQ/SOXL만** 수량 정합성 비교
+- HWM75/managed equity는 Toss 계좌 총자산이 아니라 **JDSS 초기자본 + JDSS 체결원장 + JDSS 관리 포지션**으로 계산
+- Toss `cashBuyingPower`는 JDSS 자산으로 합산하지 않고 실제 주문 가능한 계좌 공용 유동성 상한으로만 사용
+- 개인 현금/비관리 종목이 많아 broker buying power가 커도 JDSS 가용액은 원장/HWM 한도를 초과할 수 없음
+- 비관리 종목 개인 주문으로 buying power가 줄면 JDSS BUY는 축소/차단될 수 있으므로 주문 전 실제 USD buying power를 재확인
+- 비관리 종목은 JDSS 목표수량·리밸런싱·자동 위험축소 SELL 대상이 아님
+
+회귀테스트로 preflight, live commissioning, reconciliation, managed equity/HWM 격리를 고정합니다.
+
 ## 3. 실거래 계좌 운영 계약
 
-실제 JDSS 운용계좌는 **전용·청정 계좌**로 사용합니다.
+실제 JDSS 운용계좌는 **QQQ/TQQQ/SOXL 관리종목에 대해서만 청정 상태**를 요구합니다. QQQ/TQQQ/SOXL 외 비관리 종목은 같은 Toss 계좌에 보유할 수 있습니다.
 
 최초 LIVE-ARMED commissioning 직전 반드시:
 
@@ -172,7 +186,9 @@ merge/runtime revision: **`163cfd9fb0b7325b0e403e59d589c6ac203dd6d2`**
 
 이어야 합니다.
 
-기존 개인 보유분은 실제 운용 전에 **다른 증권계좌로 이동**하고 JDSS 계좌에서는 개인 보유분과 JDSS 관리분을 공존시키지 않습니다. `feat/live-external-holdings-baseline`의 공존 기능은 production에 병합하지 않습니다.
+기존 개인 **QQQ/TQQQ/SOXL** 보유분은 실제 운용 전에 다른 증권계좌로 이동하고 JDSS 관리분과 공존시키지 않습니다. `feat/live-external-holdings-baseline`의 관리종목 공존 기능은 production에 병합하지 않습니다.
+
+AAPL/NVDA/SPY 등 **QQQ/TQQQ/SOXL 외 비관리 종목은 공존 가능**하며 JDSS 원장, HWM75, reconciliation, 자동 SELL 대상에서 제외합니다. 단, 같은 계좌의 개인 주문·현금 사용은 Toss 공용 USD buying power를 변화시킬 수 있으므로 JDSS 주문 검토 시 buying power를 다시 확인합니다.
 
 commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 수동 매매하지 않습니다. broker↔DB 수량이 달라지면 신규 BUY보다 SAFE_MODE/reconciliation을 우선합니다.
 
@@ -183,8 +199,9 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 - **Toss account read-only API:** GO
 - **Toss write-boundary 정적/회귀 검증:** GO
 - **`/halt` 취소확정 안전계층:** GO
+- **비관리 종목 계좌 공존 격리:** GO (관리종목만 청정 필요)
 - **live commissioning 코드/절차:** 준비됨
-- **실계좌 최초 commissioning:** 계좌 청정화 전까지 BLOCKED
+- **실계좌 최초 commissioning:** QQQ/TQQQ/SOXL 관리종목 청정화 전까지 BLOCKED
 - **LIVE-ARMED:** 아직 아님
 - **LIVE BUY:** LOCKED
 - **실제 Toss 주문:** 0건
@@ -192,7 +209,8 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 최초 전환은 아래 순서만 허용합니다.
 
 ```text
-관리대상 기존 보유/미체결 0 확인
+QQQ/TQQQ/SOXL 기존 보유/미체결 0 확인
+→ 필요한 USD buying power 확인
 → fresh live DB
 → real-account preflight
 → BUY HALT arm
@@ -203,22 +221,25 @@ commissioning 이후에도 JDSS 계좌의 QQQ/TQQQ/SOXL을 외부에서 별도 �
 → 별도 명시적 승인 이후에만 BUY 재개 검토
 ```
 
-계좌 청정화가 끝나기 전에는 LIVE-ARMED commissioning을 재시도하지 않습니다.
+QQQ/TQQQ/SOXL 관리종목 청정화가 끝나기 전에는 LIVE-ARMED commissioning을 재시도하지 않습니다. 비관리 종목의 존재만으로 commissioning을 차단하지 않습니다.
 
 ## 5. 실제 주문 전 남은 P0
 
 1. 실운영 직전 QQQ/TQQQ/SOXL 기존 보유 및 미체결 주문 0을 당일 read-only preflight로 확인
-2. **fresh separate live DB**로 owner-only LIVE-ARMED commissioning PASS
-3. `live_commissioned=1`, `operator_buy_halt=1`, broker↔DB reconciliation PASS 확인
-4. 실제 Toss write path(`POST order → orderId/clientOrderId → 주문조회 → 부분/완전체결·취소 → 원장반영`)를 **실계좌에서 별도 commissioning**으로 최종 검증
-5. timeout/401/429/5xx/UNKNOWN에서 동일 write 요청을 자동 replay하지 않는 계약 유지
-6. 모든 Go-Live 체크리스트 PASS 뒤에만 **별도 명시적 승인**으로 BUY 잠금을 해제
+2. 같은 계좌의 비관리 종목과 무관하게 필요한 USD buying power가 충분한지 확인
+3. **fresh separate live DB**로 owner-only LIVE-ARMED commissioning PASS
+4. `live_commissioned=1`, `operator_buy_halt=1`, broker↔DB reconciliation PASS 확인
+5. 실제 Toss write path(`POST order → orderId/clientOrderId → 주문조회 → 부분/완전체결·취소 → 원장반영`)를 **실계좌에서 별도 commissioning**으로 최종 검증
+6. timeout/401/429/5xx/UNKNOWN에서 동일 write 요청을 자동 replay하지 않는 계약 유지
+7. 모든 Go-Live 체크리스트 PASS 뒤에만 **별도 명시적 승인**으로 BUY 잠금을 해제
 
 실계좌 canary나 최초 BUY는 자동 실행하지 않습니다.
 
 ## 6. 운영상 유지 원칙
 
 - 위험축소 SELL은 자동, 위험증가 BUY는 운영자 승인
+- JDSS 관리종목은 QQQ/TQQQ/SOXL로 한정하고, 그 외 비관리 종목은 JDSS 원장/HWM75/reconciliation/자동 SELL에서 격리
+- 계좌 공용 `cashBuyingPower`는 JDSS 자산으로 간주하지 않고 실제 주문 유동성 상한으로만 사용
 - 현재가 공급자 일시 오류는 bounded retry + 대체 intraday 경로로 흡수하되, 끝까지 가격을 증명하지 못하면 임의 stale 가격 대신 fail-closed
 - 긴급 이상 시 `/halt`로 BUY를 우선 차단하고 SELL·monitor·reconciliation은 유지
 - `/halt`의 취소 요청 성공을 원주문 취소 완료로 간주하지 않으며, 원주문 `CANCELED`가 확인되지 않으면 uncertain으로 유지
