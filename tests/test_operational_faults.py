@@ -318,11 +318,11 @@ def test_operator_text_distinguishes_live_order_states():
     assert "실주문 접수" in pending and "/order" in pending
     assert "실주문 부분체결" in partial and "남은 수량" in partial
     assert "실주문 체결 완료" in filled and "/account" in filled
-    assert "실주문 거부" in rejected and "/signal" in rejected
-    assert "실주문 취소 확인" in canceled and "/signal" in canceled
+    assert "실주문 거부" in rejected and "새 승인 여부" in rejected
+    assert "실주문 취소 확인" in canceled and "새 승인" in canceled
     assert "실주문 변경 확인 필요" in replaced and "/order" in replaced
     assert "실주문 결과 확인 필요" in unknown
-    assert "재주문하지 마세요" in unknown and "/account" in unknown
+    assert "재주문하지 말고" in unknown and "/account" in unknown
     assert "모의주문" not in pending
     assert "모의주문" not in partial
     assert "모의주문" not in filled
