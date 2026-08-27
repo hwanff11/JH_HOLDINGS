@@ -9,7 +9,7 @@
 ## 1. 기본 원칙
 
 1. Oracle에는 검증된 **최신 `main`**만 배포합니다.
-2. 일반 배포와 live 활성화는 서로 다른 승인입니다.
+2. 모의운용 배포, 최초 실거래 전환, 기존 실거래 운영 프로그램 갱신은 서로 다른 승인입니다.
 3. 현재 계약이 forced dry-run이면 배포가 이를 완화할 수 없습니다.
 4. 새 release를 먼저 준비·검증한 뒤 service downtime을 최소화합니다.
 5. service stop 이후 실패하면 코드와 DB를 함께 이전 정상상태로 rollback할 수 있어야 합니다.
@@ -68,7 +68,9 @@ JDSS_LIVE_CONFIRMATION=
 
 **config version이 바뀌면 표준 deploy를 중단**하고 별도 migration plan·DB 호환성·rollback test가 필요합니다.
 
-## 5. 표준 배포 경로
+## 5. 배포 경로
+
+### 모의운용 배포
 
 로컬 관리 환경에서는 저장소의 `deploy.sh`를 사용합니다.
 
@@ -79,6 +81,24 @@ env -u GITHUB_TOKEN ./deploy.sh
 GitHub 연결 환경에서는 owner-only **Deploy Oracle Dry Run** ChatOps를 사용합니다. 저장소 소유자가 제목을 `[deploy-oracle-dry-run]`으로 시작하는 Issue를 열면 workflow가 실행 시점의 최신 `main`을 checkout해 같은 `deploy.sh` 경로로 배포합니다.
 
 임의 branch·임의 SHA를 입력받아 production runtime에 배포하지 않습니다.
+
+### 기존 실거래 운영 프로그램 갱신
+
+이미 실계좌 연결·매수 잠금 상태로 전환된 Oracle은 표준 `deploy.sh`를 사용하지 않습니다. 표준 배포는 의도적으로 모의운용을 강제하므로 현재 실계좌 연결을 해제하기 때문입니다.
+
+기존 실거래 원장을 유지한 코드 갱신은 `deploy_live_armed.sh`와 소유자 전용 **Deploy Oracle Live Armed** 절차만 사용합니다. GitHub에서는 저장소 소유자가 제목을 `[deploy-oracle-live-armed]`로 시작하는 Issue를 열어 최신 `main`을 배포합니다.
+
+이 경로는 다음 조건을 모두 만족하지 않으면 중단합니다.
+
+- 기존 운영 모드가 실거래이고 정확한 실거래 확인값이 설정됨
+- 기존 별도 실거래 원장과 준비 완료 표시가 존재함
+- 신규 매수 잠금이 이미 설정됨
+- 실제 계좌·원장 대조 정상
+- 로컬·토스 미체결 주문과 활성 승인이 없음
+- 기존 버전과 새 버전의 `strategy.yaml`이 같음
+- DB 스키마 코드 변경이 없음
+
+배포 후에도 실계좌 연결은 유지하지만 신규 매수 잠금은 자동으로 다시 설정합니다. `/resume`은 별도의 운영자 판단이며 배포 과정에서 실행하지 않습니다.
 
 ## 6. rollback-safe 배포 순서
 
@@ -109,6 +129,11 @@ service stop 이후 실패하면 자동 rollback:
 7. service active와 config/reconciliation 재확인
 
 rollback까지 실패하면 정상으로 추정하지 않고 **신규 BUY 금지 + 수동 복구** 대상으로 취급합니다.
+
+실거래 운영 프로그램 갱신은 실패 시점에 따라 DB 복구 원칙이 다릅니다.
+
+- 새 서비스를 시작하기 전 실패: 외부 주문 부작용이 없으므로 코드·서비스 설정·DB를 배포 직전으로 복구
+- 새 서비스를 시작한 뒤 실패: 자동 위험축소 매도가 발생했을 가능성이 있으므로 DB를 과거 snapshot으로 되돌리지 않고 실제 상태를 보존한 채 이전 코드만 복구
 
 ## 7. DB migration
 
