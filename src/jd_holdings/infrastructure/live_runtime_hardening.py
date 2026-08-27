@@ -14,6 +14,14 @@ from .telegram_bot import SEOUL_TZ, _daily_analysis_is_due, _format_idle_cash_ev
 from .telegram_bot_runtime import _format_daily_portfolio_brief
 
 
+def _live_order_monitor_interval(config) -> int:
+    """Use the faster safe cadence in live without changing strategy.yaml."""
+    return min(
+        config.scheduler.poll_interval_seconds,
+        config.scheduler.order_monitor_interval_seconds,
+    )
+
+
 class HardenedLiveInitialOnboardingPortfolioService(
     LiveInitialOnboardingPortfolioService
 ):
@@ -93,7 +101,7 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
 
             monitor_due = (
                 time.monotonic() - self._last_monitor
-                >= self.config.scheduler.order_monitor_interval_seconds
+                >= _live_order_monitor_interval(self.config)
             )
             safety_ready = False
             if monitor_due and not maintenance:
