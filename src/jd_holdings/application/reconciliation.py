@@ -55,13 +55,13 @@ class ReconciliationService:
                     (symbol, underlyings[symbol], now),
                 )
 
-    def _refresh_open_core_orders(self) -> None:
+    def _refresh_open_core_orders(self) -> dict[str, tuple[int, int]]:
         """Apply broker-confirmed core fills before holdings reconciliation.
 
-        A broker fill can become visible in holdings a few moments before the normal
-        order monitor persists it. Refreshing every known core order first closes
-        that false-mismatch window without ever resubmitting an order.
+        Returns newly applied BUY/SELL quantities per symbol. Those deltas provide a
+        one-cycle allowance when the order endpoint is ahead of the holdings endpoint.
         """
+        recent: dict[str, list[int]] = {}
         for local in list(self.repository.open_orders()):
             if str(local["purpose"]) not in CORE_ORDER_PURPOSES:
                 continue
@@ -69,13 +69,15 @@ class ReconciliationService:
             if not broker_order_id:
                 continue
             client_order_id = str(local["client_order_id"])
+            symbol = str(local["symbol"])
+            prior_filled = int(local.get("filled_qty") or 0)
             try:
                 raw = self.broker.get_order(broker_order_id)
                 receipt = receipt_from_order(raw, client_order_id)
                 OrderManager._validate_receipt(
                     receipt,
                     expected_client_order_id=client_order_id,
-                    expected_symbol=str(local["symbol"]),
+                    expected_symbol=symbol,
                     expected_side=str(local["side"]),
                     expected_quantity=int(local["qty"]),
                 )
@@ -87,15 +89,22 @@ class ReconciliationService:
                     average_fill_price=receipt.average_fill_price,
                     raw=receipt.raw,
                 )
+                newly_filled = max(0, receipt.filled_quantity - prior_filled)
                 if receipt.filled_quantity > 0:
                     self.repository.apply_core_fill(client_order_id)
+                if newly_filled > 0:
+                    bucket = recent.setdefault(symbol, [0, 0])
+                    if str(local["side"]).upper() == "BUY":
+                        bucket[0] += newly_filled
+                    elif str(local["side"]).upper() == "SELL":
+                        bucket[1] += newly_filled
             except Exception as exc:
                 self.repository.set_system_value("v322_portfolio_safe_mode", "1")
                 self.repository.log_event(
                     "SAFE_MODE",
                     "CORE_ORDER_REFRESH_FAILED",
                     "계좌 대조 전 열린 코어 주문 상태를 확정하지 못했습니다",
-                    symbol=str(local["symbol"]),
+                    symbol=symbol,
                     context={
                         "client_order_id": client_order_id,
                         "broker_order_id": broker_order_id,
@@ -105,24 +114,27 @@ class ReconciliationService:
                 raise RuntimeError(
                     "열린 코어 주문 상태 확인 실패로 SAFE_MODE입니다"
                 ) from exc
+        return {symbol: (values[0], values[1]) for symbol, values in recent.items()}
 
     @staticmethod
     def _core_fill_transition_explains_quantity(
         expected_total: int,
         broker_qty: Decimal,
         local_orders: list[dict],
+        *,
+        recent_buy: int = 0,
+        recent_sell: int = 0,
     ) -> bool:
-        """Allow only a directionally possible in-flight core fill delta.
+        """Allow only directionally possible short-lived order/holdings skew.
 
-        The order snapshot may become stale immediately after it is read. If holdings
-        already include a newly filled slice, defer the mismatch for one monitor cycle
-        only when that delta fits inside the still-open BUY/SELL quantity envelope.
+        Two races are covered without hiding arbitrary account differences:
+        - holdings moves first while a local core order still has remaining quantity;
+        - order status moves first and JDSS applies the fill before holdings catches up.
         """
         if Decimal(expected_total) == broker_qty:
             return False
         remaining_buy = 0
         remaining_sell = 0
-        has_core_order = False
         for order in local_orders:
             if str(order["purpose"]) not in CORE_ORDER_PURPOSES:
                 continue
@@ -131,19 +143,18 @@ class ReconciliationService:
             remaining = max(0, int(order["qty"]) - int(order.get("filled_qty") or 0))
             if remaining <= 0:
                 continue
-            has_core_order = True
             if str(order["side"]).upper() == "BUY":
                 remaining_buy += remaining
             elif str(order["side"]).upper() == "SELL":
                 remaining_sell += remaining
-        if not has_core_order:
+        if not any((remaining_buy, remaining_sell, recent_buy, recent_sell)):
             return False
-        lower = Decimal(expected_total - remaining_sell)
-        upper = Decimal(expected_total + remaining_buy)
+        lower = Decimal(expected_total - remaining_sell - recent_buy)
+        upper = Decimal(expected_total + remaining_buy + recent_sell)
         return lower <= broker_qty <= upper
 
     def run(self) -> dict[str, list[str]]:
-        self._refresh_open_core_orders()
+        recent_fills = self._refresh_open_core_orders()
         try:
             raw_holdings = self.broker.get_holdings()
         except Exception as exc:
@@ -192,11 +203,16 @@ class ReconciliationService:
             expected_total = core_qty + booster_qty
             issues: list[str] = []
             local_orders = self.repository.open_orders(symbol)
+            recent_buy, recent_sell = recent_fills.get(symbol, (0, 0))
             transition_explains_qty = (
                 not quantity_invalid
                 and broker_qty == broker_qty.to_integral_value()
                 and self._core_fill_transition_explains_quantity(
-                    expected_total, broker_qty, local_orders
+                    expected_total,
+                    broker_qty,
+                    local_orders,
+                    recent_buy=recent_buy,
+                    recent_sell=recent_sell,
                 )
             )
 
