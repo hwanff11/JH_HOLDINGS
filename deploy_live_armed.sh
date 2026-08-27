@@ -199,7 +199,8 @@ grep -q 'live_enabled: false' "$release_dir/strategy.yaml"
 # 전략 수학·자금·DB 계약 변경은 정기 코드 갱신에서 금지합니다.
 # 2026-09-01 실거래 준비에서 승인된 단 하나의 예외는
 # 장전·장후 전용에서 장전·정규장·장후로 바꾸는 주문 세션 확장입니다.
-"$remote_python" - "$previous_current/strategy.yaml" "$release_dir/strategy.yaml" <<'PY'
+"$release_dir/.venv/bin/python" - \
+  "$previous_current/strategy.yaml" "$release_dir/strategy.yaml" <<'PY'
 import copy
 import sys
 

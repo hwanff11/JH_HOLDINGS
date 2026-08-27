@@ -29,6 +29,10 @@ def test_live_update_preserves_environment_and_existing_live_ledger():
     assert 'backup_path="$shared_dir/backups/jdss-live-' in script
     assert "source.backup(target)" in script
     assert "LIVE_STRATEGY_CONTRACT=PASS" in script
+    assert (
+        '"$release_dir/.venv/bin/python" - \\\n'
+        '  "$previous_current/strategy.yaml" "$release_dir/strategy.yaml"'
+    ) in script
     assert '"regular": False' in script
     assert '"regular": True' in script
     assert "previous_without_sessions != candidate_without_sessions" in script
