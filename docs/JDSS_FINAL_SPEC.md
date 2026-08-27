@@ -1,25 +1,28 @@
-# JDSS 공식 사양 — Production 규범 계약
+# JDSS 공식 사양 — 실제 운영 규범
 
 현재 공식 전략 ID는 **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**입니다.
 
-이 문서는 production 구현이 따라야 하는 **규범 계약**입니다. 실행 숫자는 [`../strategy.yaml`](../strategy.yaml), 실제 구현은 [`../src/jd_holdings/`](../src/jd_holdings/), 현재 배포·live 상태는 [`../CURRENT_WORK.md`](../CURRENT_WORK.md)가 기준입니다.
+이 문서는 실제 운영 프로그램이 따라야 하는 **규범 계약**입니다. 실행 숫자는 [`../strategy.yaml`](../strategy.yaml), 실제 구현은 [`../src/jd_holdings/`](../src/jd_holdings/), 현재 배포·실거래 상태는 [`../CURRENT_WORK.md`](../CURRENT_WORK.md)가 기준입니다.
+
+이 문서는 정확한 내부 계약을 다루므로 코드명은 일부 유지합니다. 운영자가 보는 쉬운 설명은 [`STRATEGY_GUIDE.md`](STRATEGY_GUIDE.md), Telegram 사용법은 [`TELEGRAM_BOT_GUIDE.md`](TELEGRAM_BOT_GUIDE.md)를 먼저 읽습니다.
 
 `FINAL`은 버전별 복사본을 뜻하지 않습니다. 새 릴리즈에서도 이 파일을 제자리 갱신하고 과거 계약은 Git tag와 [`HISTORY.md`](HISTORY.md)에서 복구합니다.
 
 ## 1. 관리 자산과 자금 계약
 
-JDSS V3.2.2가 직접 관리하는 티커는 **QQQ, TQQQ, SOXL**입니다. SOXX는 상대강도 판단용 기준 ETF이며 직접 allocation 주문을 만들지 않습니다.
+JDSS V3.2.2가 직접 관리하는 티커는 **QQQ, TQQQ, SOXL**입니다. SOXX는 상대강도 판단용 기준 ETF이며 직접 목표비중 주문을 만들지 않습니다.
 
 자금 계약:
 
 - 시작 위험원금: **$50,000**
-- HWM75 위험예산:
+- HWM75 투자한도:
   `min(현재 평가액, 50,000 + 0.75 × max(0, 최고 평가액 - 50,000))`
 - 새 최고자산 초과이익의 75%만 위험예산 증가에 반영
 - 나머지 25% 이익은 JDSS 현금으로 남지만 위험예산 증가에 사용하지 않음
 - 손실 시 외부 현금 자동보충 금지
 - SGOV 자동운용 OFF
-- live OFF
+- 일반 설정 경로의 실거래 잠금 `portfolio.live_enabled=false` 유지
+- 실제 실거래 여부와 신규 매수 잠금은 [`../CURRENT_WORK.md`](../CURRENT_WORK.md)의 현재 상태를 따름
 
 HWM은 완결 거래일 종가 기준 JDSS 평가액으로만 갱신합니다.
 
@@ -279,34 +282,32 @@ live 잠금을 검토하기 전 최소한 다음을 증명해야 합니다.
 - 초기자금: $50,000
 - buy fee: 0.1%
 - sell fee: 0.1%
-- 기본 slippage: 0.1%
-- next-session execution
+- 기본 가격 미끄러짐: 0.1%
+- 다음 거래시간 체결
 - 보고 시작일을 빈 계좌의 최초진입일로 간주
 - 1~3번째 미국 거래세션: 최종 목표의 50%
 - 4~6번째: 75%
 - 7번째부터: 100%
-- 백테스트는 각 단계 체결 완료를 가정해 최소 세션 경과 후 자동 진행; production의 `/onboarding` 운영자 승인을 대체하지 않음
+- 과거검증은 각 단계 체결 완료를 가정해 최소 거래일 경과 후 자동 진행; 실제 운영의 `/onboarding` 운영자 승인을 대체하지 않음
 - HWM75 적용
 - SGOV OFF
-- production과 동일 allocation/JDSS virtual-state 함수를 공유
+- 실제 운영과 동일한 목표비중·JDSS 가상상태 함수를 공유
 
 승인된 사람이 읽는 기준 결과는 [`STRATEGY_GUIDE.md`](STRATEGY_GUIDE.md)가 소유합니다. 실행별 run ID와 artifact를 이 규범 문서에 누적하지 않습니다.
 
-## 17. 연구와 production 경계
+## 17. 연구와 실제 운영 경계
 
-연구 브랜치의 후보, SHADOW 전략, 높은 백테스트 수치는 사용자의 별도 채택과 정식 구현 PR 없이는 production 계약이 아닙니다.
+연구 브랜치의 후보, 모의관찰 전략, 높은 과거검증 수치는 사용자의 별도 채택과 정식 구현 PR 없이는 실제 운영 계약이 아닙니다.
 
 연구 검증은 [`research/RESEARCH_PROTOCOL.md`](research/RESEARCH_PROTOCOL.md), 대표 채택·기각 이력은 [`HISTORY.md`](HISTORY.md)를 따릅니다.
 
-## 18. live hard lock
+## 18. 실거래 오작동 방지 잠금
 
-현재 계약은 **실제 Toss 주문 활성화를 포함하지 않습니다.**
+일반 설정 경로는 실제 Toss 주문을 활성화하지 않습니다. 현재 실거래 연결·신규 매수 잠금 상태는 [`../CURRENT_WORK.md`](../CURRENT_WORK.md)를 따릅니다.
 
-다음 잠금을 동시에 유지합니다.
+일반 경로에서는 다음 잠금을 유지합니다.
 
 - `portfolio.live_enabled=false`
-- 애플리케이션 live hard lock
-- Oracle forced dry-run
-- 빈 live confirmation
+- 애플리케이션 실거래 차단
 
-미래에 live를 변경하려면 제15절 preflight와 별도의 명시적 승인, 코드·설정·문서·테스트의 동시 변경이 필요합니다.
+실거래는 승인된 별도 준비 전환 경로에서만 실행하며, 별도 새 실거래 원장·준비 완료 표시·신규 매수 잠금·계좌 대조를 필수로 합니다. 신규 매수 잠금 해제는 배포와 별도의 명시적 결정이며, 해제 후에도 각 매수는 2단계 승인을 거칩니다.

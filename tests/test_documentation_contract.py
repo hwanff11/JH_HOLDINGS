@@ -86,7 +86,7 @@ def test_mutable_runtime_status_has_single_source():
         encoding="utf-8"
     )
 
-    assert "릴리즈·배포 SHA·Oracle 동기화 여부·live 잠금 상태" in readme
+    assert "릴리즈·배포 버전·Oracle 동기화 여부·실거래 잠금 상태" in readme
     assert "현재 브랜치·배포·다음 작업" in docs_readme
     assert "branch와 마지막 commit" in workflow
     assert "## 현재 운영 기준" not in docs_readme
@@ -119,16 +119,16 @@ def test_one_page_report_and_guide_cover_required_plain_language_topics():
         "QQQ 단순보유 비교",
         "실제 하루 주문 흐름",
         "SAFE_MODE",
-        "백테스트는 미래수익을 보장하지 않습니다",
+        "과거검증은 미래수익을 보장하지 않습니다",
     ):
         assert required in report
     for required in (
         "flowchart",
         "HWM75",
         "RS6M",
-        "일괄 검토",
-        "BUY 후보",
-        "approval",
+        "주문 묶음 검토",
+        "매수 후보",
+        "최종 승인",
         "64.29%",
     ):
         assert required in guide
@@ -143,7 +143,8 @@ def test_onboarding_contract_lives_in_existing_current_documents():
     assert "50%" in spec and "75%" in spec and "100%" in spec
     assert "stale 버튼" in spec
     assert "/onboarding" in telegram
-    assert "callback" in telegram
+    assert "버튼" in telegram
+    assert "버튼 응답" in docs_readme
     assert not (ROOT / "docs/INITIAL_ONBOARDING.md").exists()
     assert "INITIAL_ONBOARDING.md" not in docs_readme
 

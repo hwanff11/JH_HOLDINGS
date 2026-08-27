@@ -180,6 +180,11 @@ def test_live_operator_guidance_does_not_claim_forced_dry_run():
     dry = _live_mode_operator_text(original, "dry_run")
 
     assert "forced dry-run" not in live
-    assert "LIVE 연결" in live
+    assert "실계좌가 연결" in live
     assert "2단계 승인" in live
     assert dry == original
+
+    help_text = "🧪 모의운용에서는 승인해도 실제 토스 주문이 전송되지 않습니다."
+    live_help = _live_mode_operator_text(help_text, "live")
+    assert "모의운용" not in live_help
+    assert "신규 매수 잠금 해제와 2단계 승인" in live_help

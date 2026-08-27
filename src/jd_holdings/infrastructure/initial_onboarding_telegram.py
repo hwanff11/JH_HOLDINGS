@@ -26,12 +26,12 @@ LOGGER = logging.getLogger(__name__)
 
 def _augment_help_message(text: str) -> str:
     """Keep the base runtime help in sync without duplicating the whole handler."""
-    if "[JDSS V3.2.2 운영 메뉴]" not in text or "<code>/onboarding</code>" in text:
+    if "[JDSS 운영 도움말]" not in text or "<code>/onboarding</code>" in text:
         return text
-    marker = "<b>승인·검증</b>"
+    marker = "<b>자세히 보고 싶을 때</b>"
     addition = (
-        "<b>최초진입</b>\n"
-        "• <code>/onboarding</code> — 50% → 75% → 100% 매수 한도·대기일 확인\n\n"
+        "<b>첫 투자 단계</b>\n"
+        "• <code>/onboarding</code> — 50% → 75% → 100% 한도와 대기일 확인\n\n"
     )
     if marker in text:
         return text.replace(marker, addition + marker, 1)

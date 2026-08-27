@@ -2,6 +2,32 @@
 
 이 파일은 저장소 문서의 **지도, 소유권, 우선순위, 갱신 규칙**을 정의합니다. 전략 내용 자체나 현재 배포 상태를 여기 복제하지 않습니다.
 
+## 문서 표현 원칙
+
+- 운영자와 비개발자가 읽는 설명은 **한글을 먼저** 씁니다.
+- 영문 기술용어가 꼭 필요하면 처음 한 번만 `한글 설명(영문)` 형태로 씁니다.
+- 코드명, 설정 키, 데이터베이스 값과 실제 명령은 오작동을 막기 위해 원문을 유지합니다.
+- 같은 영문 약어를 여러 문서에서 반복 설명하지 않고 아래 표현으로 통일합니다.
+
+| 내부 용어 | 문서에서 우선하는 표현 |
+|---|---|
+| production | 실제 운영판 |
+| runtime | 운영 서버 프로그램 |
+| live / LIVE-ARMED | 실거래 / 실계좌 연결·매수 잠금 |
+| dry-run / forced dry-run | 모의운용 / 강제 모의운용 |
+| BUY / SELL | 매수 / 매도 |
+| SAFE_MODE | 안전정지 |
+| reconciliation | 계좌·원장 대조 |
+| preflight | 사전점검 |
+| fail-closed | 확인 불가 시 차단 |
+| broker | 증권사 또는 토스 |
+| deployment / rollback | 배포 / 이전 버전 복구 |
+| snapshot / smoke test | 백업 사본 / 기본 작동 확인 |
+| batch / callback | 주문 묶음 / 버튼 응답 |
+| onboarding | 첫 투자 단계 |
+
+영문은 소스코드 검색이나 정확한 장애코드 확인에 필요할 때만 괄호 또는 코드 표시로 함께 적습니다.
+
 ## 1. 독자별 빠른 경로
 
 ### 운영자
@@ -20,8 +46,8 @@
 
 ### 전략 연구자
 
-1. [`../CURRENT_WORK.md`](../CURRENT_WORK.md)에서 production 기준 확인
-2. [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md)와 `strategy.yaml`로 baseline 계약 확인
+1. [`../CURRENT_WORK.md`](../CURRENT_WORK.md)에서 실제 운영판 기준 확인
+2. [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md)와 `strategy.yaml`로 기준 전략 확인
 3. [`research/RESEARCH_PROTOCOL.md`](research/RESEARCH_PROTOCOL.md)로 연구 설계
 4. [`HISTORY.md`](HISTORY.md)에서 이미 기각·보류한 방향 확인
 
@@ -32,7 +58,7 @@
 | [`../CURRENT_WORK.md`](../CURRENT_WORK.md) | 현재 릴리즈, source/runtime 동기화, live 상태, 최근 완료, 다음 작업 | 긴 설계 설명, 과거 실행 일지, 반복되는 안전 규칙 |
 | [`ONE_PAGE_REPORT.md`](ONE_PAGE_REPORT.md) | 비전문가용 한 장 요약, 핵심 지표의 쉬운 해석 | 세부 예외조건, API·DB 계약 |
 | [`STRATEGY_GUIDE.md`](STRATEGY_GUIDE.md) | 전략의 쉬운 상세 설명, 예시, 흐름, 승인된 기준 백테스트 | 구현 세부 예외의 규범 문구 |
-| [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md) | production이 따라야 하는 전략·자금·주문·백테스트 규범 계약 | 현재 SHA·서버 상태, 연구 중간결과 |
+| [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md) | 실제 운영판이 따라야 하는 전략·자금·주문·과거검증 규범 | 현재 버전·서버 상태, 연구 중간결과 |
 | [`TELEGRAM_BOT_GUIDE.md`](TELEGRAM_BOT_GUIDE.md) | 운영자가 보는 명령, 버튼, 상태, 주문 흐름, 장애 대응 | 전략 수학의 중복 설명 |
 | [`HISTORY.md`](HISTORY.md) | 대표 릴리즈와 채택·기각·SHADOW 결정의 역사 색인 | 현재판 상세 계약, 일회성 로그 전체 |
 | [`infra/DEVELOPMENT_WORKFLOW.md`](infra/DEVELOPMENT_WORKFLOW.md) | 사람 기준 브랜치·PR·CI·인수인계 흐름 | 에이전트 단축명령의 세부 체크리스트 |
@@ -48,7 +74,7 @@
 
 | 확인하려는 사실 | 기준 |
 |---|---|
-| 현재 릴리즈·배포·live 상태 | `CURRENT_WORK.md` + 실제 GitHub/Oracle 상태 |
+| 현재 릴리즈·배포·실거래 상태 | `CURRENT_WORK.md` + 실제 GitHub/Oracle 상태 |
 | 실행 숫자·파라미터 | `strategy.yaml` |
 | 전략·자금·주문 규범 | `JDSS_FINAL_SPEC.md` |
 | 실제 프로그램 동작 | `src/jd_holdings/` + 테스트 |
@@ -63,7 +89,7 @@
 | 변경 | 반드시 함께 확인할 문서 |
 |---|---|
 | 전략 규칙·비중·지표·자금공식 | `JDSS_FINAL_SPEC`, `STRATEGY_GUIDE`, `ONE_PAGE_REPORT`, `strategy.yaml` |
-| BUY/SELL·승인·부분체결·reconciliation | `JDSS_FINAL_SPEC`, `TELEGRAM_BOT_GUIDE`, `infra/SECURITY` |
+| 매수·매도·승인·부분체결·계좌 대조 | `JDSS_FINAL_SPEC`, `TELEGRAM_BOT_GUIDE`, `infra/SECURITY` |
 | Telegram 버튼·명령·문구 | `TELEGRAM_BOT_GUIDE`, 도움말·포맷 테스트 |
 | 배포·systemd·rollback | `infra/DEPLOYMENT`, `infra/SECURITY`, 배포 계약 테스트 |
 | 연구 방법·승격 기준 | `research/RESEARCH_PROTOCOL` |
@@ -98,9 +124,9 @@
 - [ ] 이 내용의 **소유 문서가 하나**인지
 - [ ] 사용자용 표현과 내부 구현용 용어가 구분되는지
 - [ ] 현재 수치가 `strategy.yaml`·canonical backtest와 맞는지
-- [ ] live/dry-run 경계를 오해할 표현이 없는지
-- [ ] BUY/SELL 자동화 범위를 실제 코드보다 넓게 표현하지 않았는지
-- [ ] 연구 후보를 production처럼 표현하지 않았는지
+- [ ] 실거래와 모의운용의 경계를 오해할 표현이 없는지
+- [ ] 매수·매도 자동화 범위를 실제 코드보다 넓게 표현하지 않았는지
+- [ ] 연구 후보를 실제 운영판처럼 표현하지 않았는지
 - [ ] 오래된 SHA·run ID·완료된 작업을 `CURRENT_WORK`에 누적하지 않았는지
 - [ ] 링크가 현행 파일을 가리키는지
 - [ ] 문서-only 변경이면 runtime을 불필요하게 재배포하지 않는지
