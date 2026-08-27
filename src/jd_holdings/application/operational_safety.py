@@ -48,6 +48,15 @@ class OperatorSafetyService:
     def is_halted(self) -> bool:
         return self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
 
+    def _safe_mode_reasons(self) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if self.repository.get_system_value("v322_portfolio_safe_mode") == "1":
+            reasons.append("V322_PORTFOLIO_SAFE_MODE")
+        for symbol in self.repository.config.enabled_symbols:
+            if self.repository.get_position(symbol).state.value == "SAFE_MODE":
+                reasons.append(f"{symbol}_SAFE_MODE")
+        return tuple(reasons)
+
     @staticmethod
     def _cancel_is_confirmed(raw_order: dict[str, Any], broker_order_id: str) -> bool:
         """Treat a cancellation as settled only when the original order says CANCELED.
@@ -141,6 +150,13 @@ class OperatorSafetyService:
                 "브로커/원장 정합성 오류가 남아 있어 BUY 차단을 해제할 수 없습니다"
             )
 
+        safe_reasons = self._safe_mode_reasons()
+        if safe_reasons:
+            raise RuntimeError(
+                "sticky SAFE_MODE가 남아 있어 BUY 차단을 해제할 수 없습니다 "
+                f"({', '.join(safe_reasons)})"
+            )
+
         open_buys = [
             order
             for order in self.repository.open_orders()
@@ -164,6 +180,12 @@ class OperatorSafetyService:
                     raise RuntimeError(
                         "BUY 차단 해제 직전에 새 미체결 BUY가 확인되었습니다"
                     )
+            safe_reasons = self._safe_mode_reasons()
+            if safe_reasons:
+                raise RuntimeError(
+                    "BUY 차단 해제 직전에 SAFE_MODE가 확인되었습니다 "
+                    f"({', '.join(safe_reasons)})"
+                )
             self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
 
         self.repository.log_event(
