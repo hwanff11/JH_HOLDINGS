@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from jd_holdings.core.enums import PositionState
+
 from .broker import Broker
 from .database import SQLiteRepository
 from .reconciliation import ReconciliationService
@@ -56,6 +58,52 @@ class OperatorSafetyService:
             if self.repository.get_position(symbol).state.value == "SAFE_MODE":
                 reasons.append(f"{symbol}_SAFE_MODE")
         return tuple(reasons)
+
+    def _recover_clean_reconciliation_safe_mode(self) -> tuple[str, ...]:
+        """Clear only stale reconciliation SAFE_MODE after a fresh clean proof.
+
+        V3.2.2 reconciliation intentionally sets sticky SAFE_MODE on uncertainty. A
+        later clean reconciliation is necessary but was previously unable to clear
+        that sticky state, which made /resume permanently impossible. Recovery is
+        deliberately narrow: enabled-symbol legacy position rows must be empty and
+        have no TP plan. Any non-empty/active legacy state remains fail-closed and
+        requires explicit investigation rather than an automatic reset.
+        """
+        blocked: list[str] = []
+        recoverable: list[str] = []
+        for symbol in self.repository.config.enabled_symbols:
+            position = self.repository.get_position(symbol)
+            if position.state != PositionState.SAFE_MODE:
+                continue
+            if position.quantity != 0 or self.repository.active_tp_plan(symbol) is not None:
+                blocked.append(f"{symbol}_SAFE_MODE_ACTIVE_STATE")
+                continue
+            recoverable.append(symbol)
+
+        if blocked:
+            return tuple(blocked)
+
+        for symbol in recoverable:
+            position = self.repository.get_position(symbol)
+            self.repository.transition_position(
+                symbol,
+                expected_state=PositionState.SAFE_MODE,
+                new_state=PositionState.EMPTY,
+                reason_code="CLEAN_RECONCILIATION_SAFE_MODE_RECOVERY",
+                expected_version=position.version,
+            )
+
+        if self.repository.get_system_value("v322_portfolio_safe_mode") == "1":
+            self.repository.set_system_value("v322_portfolio_safe_mode", "0")
+
+        if recoverable:
+            self.repository.log_event(
+                "INFO",
+                "SAFE_MODE_RECOVERED",
+                "깨끗한 브로커/원장 재대조 후 비활성 SAFE_MODE를 해제했습니다",
+                context={"symbols": recoverable},
+            )
+        return ()
 
     @staticmethod
     def _cancel_is_confirmed(raw_order: dict[str, Any], broker_order_id: str) -> bool:
@@ -109,13 +157,9 @@ class OperatorSafetyService:
                     uncertain.append(client_order_id)
                     continue
                 try:
-                    # Toss returns a distinct cancellation-operation id here. Do not
-                    # call that proof of settlement; verify the ORIGINAL order below.
                     self.broker.cancel_order(broker_order_id)
                     raw_original = self.broker.get_order(broker_order_id)
                 except Exception:
-                    # Do not guess whether cancellation reached the broker or whether
-                    # the order filled concurrently. Monitor/reconciliation proves it.
                     uncertain.append(client_order_id)
                 else:
                     if self._cancel_is_confirmed(raw_original, broker_order_id):
@@ -150,10 +194,17 @@ class OperatorSafetyService:
                 "브로커/원장 정합성 오류가 남아 있어 BUY 차단을 해제할 수 없습니다"
             )
 
+        recovery_blocks = self._recover_clean_reconciliation_safe_mode()
+        if recovery_blocks:
+            raise RuntimeError(
+                "SAFE_MODE에 실제 보유/TP 상태가 남아 자동 복구할 수 없습니다 "
+                f"({', '.join(recovery_blocks)})"
+            )
+
         safe_reasons = self._safe_mode_reasons()
         if safe_reasons:
             raise RuntimeError(
-                "sticky SAFE_MODE가 남아 있어 BUY 차단을 해제할 수 없습니다 "
+                "SAFE_MODE가 남아 있어 BUY 차단을 해제할 수 없습니다 "
                 f"({', '.join(safe_reasons)})"
             )
 
@@ -168,8 +219,6 @@ class OperatorSafetyService:
             )
 
         with BUY_EXECUTION_LOCK:
-            # Re-check under the same lock used by OrderManager so a new BUY cannot
-            # slip between the clean reconciliation and the flag transition.
             if self.repository.open_orders():
                 open_buys = [
                     order
