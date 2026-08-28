@@ -104,6 +104,36 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
         except Exception as notify_exc:
             self.logger.warning("Toss API diagnostic Telegram send failed: %s", notify_exc)
 
+    def _probe_open_order_lookup_failure(self, symbol: str) -> None:
+        """Re-run only a failed OPEN-order read so Toss metadata reaches Telegram.
+
+        Reconciliation intentionally returns safe issue codes instead of raising for a
+        per-symbol OPEN-order lookup failure. That fail-closed contract must stay as-is,
+        but it used to discard the TossApiError cause before the Telegram diagnostic
+        layer could inspect HTTP/code/request-id metadata. Probe once per alert window;
+        never place/cancel an order and never auto-resume SAFE_MODE.
+        """
+        try:
+            self.trading_service.broker.list_orders(
+                status="OPEN",
+                symbol=symbol,
+                limit=100,
+            )
+        except Exception as exc:
+            self._notify_runtime_error(
+                "RECONCILIATION_OPEN_ORDER_LOOKUP_ERROR",
+                f"{symbol} 미체결 주문 조회 오류",
+                exc,
+            )
+        else:
+            self._send(
+                f"ℹ️ <b>[{html.escape(symbol)} 토스 API 재확인 성공]</b>\n\n"
+                "직전 미체결 주문 조회는 실패했지만 즉시 재확인에서는 정상 응답했습니다.\n"
+                "일시적 API 오류일 수 있으나 SAFE_MODE는 자동 해제하지 않습니다.\n"
+                "<code>/errors</code>·<code>/order</code>·<code>/account</code> 확인 후 "
+                "정합성이 맞을 때만 <code>/resume</code> 하세요."
+            )
+
     def _send_reconciliation_alert(
         self,
         symbol: str,
@@ -147,6 +177,8 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
             "<code>/resume</code> 2단계 검증을 진행하세요.\n\n"
             "같은 원인은 10분 동안 반복 알림하지 않습니다."
         )
+        if any(issue.startswith("BROKER_OPEN_ORDER_LOOKUP_FAILED:") for issue in issues):
+            self._probe_open_order_lookup_failure(symbol)
 
     def _run_order_safety_cycle(self) -> bool:
         monitor_clean = True

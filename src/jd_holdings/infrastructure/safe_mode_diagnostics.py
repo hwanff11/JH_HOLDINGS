@@ -43,6 +43,10 @@ def operator_action(reason: str) -> str:
         "BROKER_ORDER_LOOKUP_FAILED": (
             "토스 앱의 주문내역을 확인하고 주문 결과가 확정될 때까지 재주문하지 마세요."
         ),
+        "BROKER_OPEN_ORDER_LOOKUP_FAILED": (
+            "토스 미체결 주문 조회가 실패했습니다. "
+            "토스 앱의 미체결·최근 체결을 확인하고 임의 재주문하지 마세요."
+        ),
         "CORE_ORDER_REFRESH_FAILED": (
             "토스 주문내역과 실제 보유수량을 확인하고 재주문하지 마세요."
         ),
