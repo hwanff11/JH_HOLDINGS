@@ -151,7 +151,7 @@ def test_order_manager_rechecks_safe_mode_at_final_broker_boundary(
     assert broker.requests == []
 
 
-def test_resume_refuses_to_clear_buy_halt_while_portfolio_safe_mode_is_sticky(
+def test_resume_clears_stale_portfolio_safe_mode_only_after_clean_reconciliation(
     tmp_path, config
 ):
     repository = SQLiteRepository(tmp_path / "resume.db", config)
@@ -167,10 +167,11 @@ def test_resume_refuses_to_clear_buy_halt_while_portfolio_safe_mode_is_sticky(
         ReconciliationService(config, repository, broker),
     )
 
-    with pytest.raises(RuntimeError, match="sticky SAFE_MODE"):
-        service.resume()
+    result = service.resume()
 
-    assert repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
+    assert result["resumed"] is True
+    assert repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "0"
+    assert repository.get_system_value("v322_portfolio_safe_mode") == "0"
 
 
 def test_live_operator_guidance_does_not_claim_forced_dry_run():
