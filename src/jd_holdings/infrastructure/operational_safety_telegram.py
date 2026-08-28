@@ -12,8 +12,8 @@ from .initial_onboarding_telegram import InitialOnboardingTelegramBotApp
 from .telegram_bot_v322 import _v322_bot_commands
 
 RESUME_CONFIRMATION = "RESUME_BUYS"
-RESUME_REVIEW_CALLBACK = "ops|resume|review"
-RESUME_CONFIRM_CALLBACK = "ops|resume|confirm"
+RESUME_REVIEW_CALLBACK = "ops_resume_review"
+RESUME_CONFIRM_CALLBACK = "ops_resume_confirm"
 
 
 def _operator_bot_commands() -> list[telebot.types.BotCommand]:
