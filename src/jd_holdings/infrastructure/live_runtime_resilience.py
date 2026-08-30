@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from jd_holdings.application.managed_account import (
     current_v322_capital_state,
@@ -31,11 +32,7 @@ def _retryable_read_error(exc: TossApiError) -> bool:
     if exc.retryable:
         return True
     status = exc.status_code
-    return bool(
-        status is not None
-        and 200 <= status < 300
-        and "응답" in str(exc)
-    )
+    return bool(status is not None and 200 <= status < 300 and "응답" in str(exc))
 
 
 class ResilientReadTossClient(TossClient):
