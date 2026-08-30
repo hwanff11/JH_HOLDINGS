@@ -17,7 +17,7 @@ from jd_holdings.infrastructure.live_runtime_hardening import (
     HardenedOperationalSafetyTelegramBotApp,
 )
 from jd_holdings.infrastructure.live_runtime_resilience import (
-    ResilientLiveInitialOnboardingPortfolioService,
+    ResilientLiveInitialOnboardingPortfolioService as HardenedLiveInitialOnboardingPortfolioService,
 )
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
@@ -78,7 +78,7 @@ def main() -> None:
         position_manager,
         tp_manager,
     )
-    portfolio_service = ResilientLiveInitialOnboardingPortfolioService(
+    portfolio_service = HardenedLiveInitialOnboardingPortfolioService(
         config,
         repository,
         broker,
