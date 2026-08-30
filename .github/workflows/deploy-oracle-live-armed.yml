@@ -62,7 +62,8 @@ jobs:
             tests/test_live_preflight_review_hardening.py \
             tests/test_operational_safety.py \
             tests/test_deployment_contract.py \
-            tests/test_toss_client.py
+            tests/test_toss_client.py \
+            tests/test_live_runtime_resilience.py
           jdss validate-config
           grep -q 'live_enabled: false' strategy.yaml
           grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml
@@ -81,6 +82,19 @@ jobs:
           printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_jdss
           printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/oracle_jdss ~/.ssh/known_hosts
+
+      - name: Arm BUY halt for live update
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+          SYSTEMD_SERVICE: jh_holdings_bot
+          REMOTE_PYTHON_BIN: ${{ vars.ORACLE_PYTHON || 'python3.12' }}
+        run: |
+          set -Eeuo pipefail
+          bash ./prepare_live_update_halt.sh
 
       - name: Deploy latest main while preserving LIVE-ARMED
         env:
@@ -109,8 +123,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$JOB_STATUS" == "success" ]]; then
-            message="✅ Oracle 실거래 안전 배포 성공: \`$DEPLOY_REF\`\n\n기존 실거래 원장·계좌 연결을 보존하고 신규 매수 잠금·계좌 대조·읽기 전용 점검·Telegram 8개 메뉴 확인을 통과했습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
+            message="✅ Oracle 실거래 안전 배포 성공: \`$DEPLOY_REF\`\n\n배포 전 신규 BUY를 자동 잠근 뒤 기존 실거래 원장·계좌 연결을 보존하고 계좌 대조·읽기 전용 점검·Telegram 8개 메뉴 확인을 통과했습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
           else
-            message="❌ Oracle 실거래 안전 배포 실패: \`${DEPLOY_REF:-버전 확인 실패}\`\n\n신규 매수 잠금을 유지하고 실패 시점에 맞는 안전 복구를 수행하도록 설계되어 있습니다. 주문·계좌정보는 Actions 로그에 출력하지 않습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
+            message="❌ Oracle 실거래 안전 배포 실패: \`${DEPLOY_REF:-버전 확인 실패}\`\n\n배포 시작 전에 신규 BUY를 먼저 차단하며, 실패 시 잠금 상태를 유지합니다. 주문·계좌정보는 Actions 로그에 출력하지 않습니다.\n\nActions run: [\`$RUN_ID\`]($RUN_URL)"
           fi
           gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$message")"
