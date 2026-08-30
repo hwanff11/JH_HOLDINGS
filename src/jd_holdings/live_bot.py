@@ -18,7 +18,7 @@ from jd_holdings.infrastructure.live_runtime_hardening import (
 )
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientLiveInitialOnboardingPortfolioService,
-    ResilientReadTossClient,
+    ResilientReadTossClient as TossClient,
 )
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
@@ -54,7 +54,7 @@ def main() -> None:
 
     data_source = YFinanceDataSource(settings.cache_path)
     market_clock = MarketClock()
-    broker = ResilientReadTossClient()
+    broker = TossClient()
     order_manager = OrderManager(repository, broker, settings)
     position_manager = PositionManager(config, repository, broker)
     tp_manager = TakeProfitManager(repository, broker, order_manager)
