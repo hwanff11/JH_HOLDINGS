@@ -47,9 +47,49 @@ def test_resume_recovers_empty_sticky_safe_mode_after_clean_reconciliation(tmp_p
     result = OperatorSafetyService(repository, broker, CleanReconciliation()).resume()
 
     assert result["resumed"] is True
+    assert result["safe_mode_recovered"] is True
     assert repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "0"
     assert repository.get_system_value("v322_portfolio_safe_mode") == "0"
     assert repository.get_position("SOXL").state == PositionState.EMPTY
+
+
+def test_resume_recovers_sticky_safe_mode_even_when_buy_halt_was_already_open(
+    tmp_path, config
+):
+    repository = SQLiteRepository(tmp_path / "resume-open-recovery.db", config)
+    broker = DryRunBroker(
+        {"QQQ": Decimal("500"), "TQQQ": Decimal("100"), "SOXL": Decimal("50")},
+        buying_power=Decimal("50000"),
+    )
+    repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
+    repository.set_system_value("v322_portfolio_safe_mode", "1")
+    _enter_safe_mode(repository, "SOXL")
+
+    result = OperatorSafetyService(repository, broker, CleanReconciliation()).resume()
+
+    assert result == {
+        "resumed": False,
+        "reason": "safe_mode_recovered",
+        "safe_mode_recovered": True,
+    }
+    assert repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "0"
+    assert repository.get_system_value("v322_portfolio_safe_mode") == "0"
+    assert repository.get_position("SOXL").state == PositionState.EMPTY
+
+
+def test_resume_relocks_buy_when_open_halt_has_real_safe_mode_mismatch(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "resume-open-dirty.db", config)
+    broker = DryRunBroker({"SOXL": Decimal("50")})
+    repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
+    repository.set_system_value("v322_portfolio_safe_mode", "1")
+    _enter_safe_mode(repository, "SOXL")
+
+    with pytest.raises(RuntimeError, match="정합성 오류"):
+        OperatorSafetyService(repository, broker, DirtyReconciliation()).resume()
+
+    assert repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
+    assert repository.get_system_value("v322_portfolio_safe_mode") == "1"
+    assert repository.get_position("SOXL").state == PositionState.SAFE_MODE
 
 
 def test_resume_never_clears_safe_mode_when_reconciliation_is_still_dirty(tmp_path, config):
@@ -94,6 +134,7 @@ def test_resume_recovers_all_empty_enabled_symbol_safe_modes_atomically(tmp_path
     result = OperatorSafetyService(repository, broker, CleanReconciliation()).resume()
 
     assert result["resumed"] is True
+    assert result["safe_mode_recovered"] is True
     assert all(
         repository.get_position(symbol).state == PositionState.EMPTY
         for symbol in config.enabled_symbols

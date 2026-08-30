@@ -185,8 +185,27 @@ class OperatorSafetyService:
         )
 
     def resume(self) -> dict[str, Any]:
-        if not self.is_halted():
-            return {"resumed": False, "reason": "already_running"}
+        was_halted = self.is_halted()
+        safe_before = self._safe_mode_reasons()
+        if not was_halted and not safe_before:
+            return {
+                "resumed": False,
+                "reason": "already_running",
+                "safe_mode_recovered": False,
+            }
+
+        # SAFE_MODE may outlive the transient condition that created it. When the
+        # operator BUY halt is already open, temporarily close only the local BUY
+        # boundary while proving that the stale SAFE_MODE can be cleared. This does
+        # not submit/cancel broker orders and prevents a BUY from slipping through
+        # between SAFE_MODE recovery and the final reconciliation checks.
+        temporary_halt = not was_halted and bool(safe_before)
+        if temporary_halt:
+            with BUY_EXECUTION_LOCK:
+                self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
+                self.repository.set_system_value(
+                    OPERATOR_BUY_HALT_AT_KEY, datetime.now(UTC).isoformat()
+                )
 
         mismatches = self.reconciliation.run()
         if mismatches:
@@ -237,9 +256,24 @@ class OperatorSafetyService:
                 )
             self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
 
+        safe_mode_recovered = bool(safe_before) and not self._safe_mode_reasons()
+        reason = (
+            "safe_mode_recovered"
+            if safe_mode_recovered and not was_halted
+            else "reconciliation_passed"
+        )
         self.repository.log_event(
             "INFO",
             "OPERATOR_BUY_RESUMED",
             "정합성 확인 후 운영자 BUY 차단을 해제했습니다",
+            context={
+                "was_halted": was_halted,
+                "safe_mode_recovered": safe_mode_recovered,
+                "temporary_halt": temporary_halt,
+            },
         )
-        return {"resumed": True, "reason": "reconciliation_passed"}
+        return {
+            "resumed": was_halted,
+            "reason": reason,
+            "safe_mode_recovered": safe_mode_recovered,
+        }

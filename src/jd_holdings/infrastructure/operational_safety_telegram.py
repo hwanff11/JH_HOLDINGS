@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import html
 import threading
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 import telebot
 
 from jd_holdings.application.operational_safety import OperatorSafetyService
+from jd_holdings.infrastructure.market_clock import (
+    is_toss_order_maintenance_window,
+    session_is_allowed,
+)
 
 from . import telegram_bot as telegram_bot_module
 from .initial_onboarding_telegram import InitialOnboardingTelegramBotApp
@@ -14,6 +21,7 @@ from .telegram_bot_v322 import _v322_bot_commands
 RESUME_CONFIRMATION = "RESUME_BUYS"
 RESUME_REVIEW_CALLBACK = "ops_resume_review"
 RESUME_CONFIRM_CALLBACK = "ops_resume_confirm"
+SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
 
 def _operator_bot_commands() -> list[telebot.types.BotCommand]:
@@ -43,6 +51,15 @@ def _live_mode_operator_text(text: str, trading_mode: str) -> str:
     )
 
 
+def _effective_buy_state_label(*, halted: bool, safe_mode: bool) -> str:
+    """Render the final BUY state rather than only the operator halt switch."""
+    if safe_mode:
+        return "🚨 차단 · 안전정지(SAFE_MODE)"
+    if halted:
+        return "🔒 매수 잠금"
+    return "✅ 매수 가능"
+
+
 class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
     """Add an operator circuit breaker without weakening automatic risk reduction."""
 
@@ -57,7 +74,8 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
         text = _live_mode_operator_text(text, self.settings.trading_mode)
         halted = self.repository.get_system_value("operator_buy_halt") == "1"
-        halt_state = "🚨 매수 잠금" if halted else "✅ 매수 가능"
+        safe_mode = self._portfolio_safe_mode()
+        buy_state = _effective_buy_state_label(halted=halted, safe_mode=safe_mode)
         if "[JDSS V3.2.2 운영 대시보드]" in text:
             marker = "• <b>실거래</b> : 🔒 잠금"
             if marker in text:
@@ -69,16 +87,108 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
                 text = text.replace(
                     marker,
                     f"• <b>실계좌 연결</b> : {live_state}\n"
-                    f"• <b>신규 매수</b> : {halt_state}",
+                    f"• <b>신규 매수</b> : {buy_state}",
                     1,
                 )
         if "[JH홀딩스 JDSS 봇 상태]" in text and self.settings.trading_mode == "live":
             text = text.replace(
                 "• <b>실주문 잠금</b> : 🟢 해제 (실거래 가능)",
-                f"• <b>실계좌 연결</b> : 🔥 실거래\n• <b>신규 매수</b> : {halt_state}",
+                f"• <b>실계좌 연결</b> : 🔥 실거래\n• <b>신규 매수</b> : {buy_state}",
                 1,
             )
         super()._send(text, markup=markup, chat_id=chat_id)
+
+    def _order_session_wait_message(self, current: datetime | None = None) -> str | None:
+        """Explain closed/blocked order windows without changing strategy timing."""
+        now = current or datetime.now(UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+
+        if is_toss_order_maintenance_window(now):
+            return (
+                "🛠️ <b>[오늘 주문 · 토스 점검시간]</b>\n\n"
+                "한국시간 08:50~08:59에는 토스 미국주식 주문 점검 때문에 "
+                "새 주문 검토·제출을 잠시 멈춥니다.\n"
+                "점검 종료 뒤 <code>/today</code>에서 다시 확인해 주세요."
+            )
+
+        session = self.market_clock.classify_session(now)
+        if session_is_allowed(session, self.config):
+            return None
+
+        try:
+            completed = self.market_clock.latest_completed_session(now, delay_minutes=0)
+            next_date = self.market_clock.next_session_date(completed)
+            calendar_session = self.market_clock.calendar.date_to_session(
+                pd.Timestamp(next_date), direction="none"
+            )
+            regular_open = self.market_clock.calendar.session_open(
+                calendar_session
+            ).to_pydatetime()
+            regular_close = self.market_clock.calendar.session_close(
+                calendar_session
+            ).to_pydatetime()
+            pre_open = regular_open - timedelta(hours=5, minutes=30)
+            after_close = regular_close + timedelta(hours=4)
+            windows = [
+                ("장전", pre_open, regular_open, "pre_market"),
+                ("정규장", regular_open, regular_close, "regular"),
+                ("장후", regular_close, after_close, "after_hours"),
+            ]
+            allowed = [
+                (label, start, end)
+                for label, start, end, name in windows
+                if session_is_allowed(name, self.config)
+            ]
+            upcoming = next(
+                ((label, start, end) for label, start, end in allowed if start > now),
+                None,
+            )
+            if upcoming is None and allowed:
+                # This can occur only around a calendar/session boundary. Keep the
+                # answer conservative rather than inventing a same-session order time.
+                upcoming = allowed[0]
+            label, start, end = upcoming if upcoming is not None else (
+                "다음 허용 세션",
+                regular_open,
+                regular_close,
+            )
+            start_kst = start.astimezone(SEOUL_TZ)
+            end_kst = end.astimezone(SEOUL_TZ)
+            regular_open_kst = regular_open.astimezone(SEOUL_TZ)
+            regular_close_kst = regular_close.astimezone(SEOUL_TZ)
+            after_close_kst = after_close.astimezone(SEOUL_TZ)
+            signal_date = self.repository.get_system_value(
+                "last_v322_allocation_trade_date"
+            ) or completed.isoformat()
+        except Exception as exc:
+            telegram_bot_module.LOGGER.warning(
+                "다음 주문 가능시간 계산 실패: %s", type(exc).__name__
+            )
+            return (
+                "🕒 <b>[오늘 주문 · 미국장 대기]</b>\n\n"
+                "현재는 설정상 주문 가능한 미국 거래세션이 아닙니다.\n"
+                "V3.2.2는 완결봉 당일 장후가 아니라 <b>다음 미국 거래일 세션부터</b> "
+                "주문하는 백테스트 동일 계약을 유지합니다."
+            )
+
+        return (
+            "🕒 <b>[오늘 주문 · 미국장 대기]</b>\n\n"
+            f"• 전략 기준일 : <code>{html.escape(signal_date)}</code>\n"
+            f"• 현재 상태 : <b>{html.escape(session)}</b> · 주문 허용시간 아님\n"
+            f"• 다음 주문 가능 : <b>{label}</b> · "
+            f"<code>{start_kst:%m/%d %H:%M}~{end_kst:%m/%d %H:%M} KST</code>\n"
+            f"• 정규장 : <code>{regular_open_kst:%m/%d %H:%M}~{regular_close_kst:%m/%d %H:%M} KST</code>\n"
+            f"• 장후 종료 : <code>{after_close_kst:%m/%d %H:%M} KST</code>\n\n"
+            "ℹ️ V3.2.2는 완결봉 당일 장후가 아니라 <b>다음 미국 거래일 세션부터</b> "
+            "주문합니다. 현재 백테스트의 ‘다음 거래일 체결’ 계약을 그대로 유지한 것입니다."
+        )
+
+    def _prepare_today_buy_batch(self):
+        wait_message = self._order_session_wait_message()
+        if wait_message is not None:
+            return wait_message, None
+        return super()._prepare_today_buy_batch()
 
     @staticmethod
     def _resume_review_markup():
@@ -104,8 +214,19 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
 
     def _resume_buy(self) -> None:
         result = self.operational_safety.resume()
+        if result.get("safe_mode_recovered"):
+            self._send(
+                "✅ <b>[안전정지 복구 완료]</b>\n\n"
+                "실계좌와 JDSS 원장을 다시 대조해 이상이 없음을 확인했고, "
+                "과거 일시 오류가 남긴 비활성 SAFE_MODE를 정리했습니다.\n"
+                "현재 신규 BUY는 안전조건을 통과한 상태이며 실제 주문은 기존 2단계 승인 후에만 제출됩니다."
+            )
+            return
         if not result["resumed"]:
-            self._send("✅ BUY 긴급정지는 이미 해제되어 있습니다.")
+            self._send(
+                "✅ BUY 긴급정지는 이미 해제되어 있고 SAFE_MODE도 없습니다.\n"
+                "추가 해제 작업은 필요하지 않습니다."
+            )
             return
         self._send(
             "✅ <b>[BUY 긴급정지 해제]</b>\n\n"
@@ -178,6 +299,7 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
                 "🔒 <b>[BUY 잠금 해제]</b>\n\n"
                 "실계좌의 신규 BUY를 허용하는 작업입니다.\n"
                 "다음 단계에서 브로커/원장 정합성과 미체결 BUY를 자동 검사합니다.\n"
+                "운영자 잠금이 이미 풀려 있어도 SAFE_MODE가 남아 있으면 다시 대조해 정상 복구를 시도합니다.\n"
                 "계속하려면 아래 버튼을 누르세요.",
                 markup=self._resume_review_markup(),
             )

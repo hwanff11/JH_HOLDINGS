@@ -18,6 +18,7 @@ from jd_holdings.infrastructure.operational_safety_telegram import (
     RESUME_CONFIRM_CALLBACK,
     RESUME_REVIEW_CALLBACK,
     OperationalSafetyTelegramBotApp,
+    _effective_buy_state_label,
 )
 from jd_holdings.settings import LIVE_CONFIRMATION_PHRASE, RuntimeSettings
 
@@ -133,3 +134,44 @@ def test_telegram_resume_uses_two_distinct_confirmation_buttons():
     assert review.keyboard[0][0].callback_data == RESUME_REVIEW_CALLBACK
     assert confirm.keyboard[0][0].callback_data == RESUME_CONFIRM_CALLBACK
     assert RESUME_REVIEW_CALLBACK != RESUME_CONFIRM_CALLBACK
+
+
+def test_dashboard_buy_state_prefers_safe_mode_over_open_operator_halt():
+    assert _effective_buy_state_label(halted=False, safe_mode=True) == (
+        "🚨 차단 · 안전정지(SAFE_MODE)"
+    )
+    assert _effective_buy_state_label(halted=True, safe_mode=False) == "🔒 매수 잠금"
+    assert _effective_buy_state_label(halted=False, safe_mode=False) == "✅ 매수 가능"
+
+
+class _SystemStateOnlyRepository:
+    @staticmethod
+    def get_system_value(key: str):
+        if key == "last_v322_allocation_trade_date":
+            return "2026-08-28"
+        return None
+
+
+def test_closed_session_message_shows_next_kst_window_and_preserves_contract(config):
+    app = object.__new__(OperationalSafetyTelegramBotApp)
+    app.market_clock = MarketClock()
+    app.config = config
+    app.repository = _SystemStateOnlyRepository()
+    current = datetime(2026, 8, 30, 23, 15, tzinfo=UTC)
+
+    message = app._order_session_wait_message(current)
+
+    assert message is not None
+    assert "08/31 17:00" in message
+    assert "다음 미국 거래일 세션부터" in message
+    assert "백테스트" in message
+
+
+def test_allowed_regular_session_does_not_show_wait_message(config):
+    app = object.__new__(OperationalSafetyTelegramBotApp)
+    app.market_clock = MarketClock()
+    app.config = config
+    app.repository = _SystemStateOnlyRepository()
+    current = datetime(2026, 8, 31, 15, 0, tzinfo=UTC)
+
+    assert app._order_session_wait_message(current) is None
