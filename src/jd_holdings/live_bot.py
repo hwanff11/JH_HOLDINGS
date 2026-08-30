@@ -18,6 +18,8 @@ from jd_holdings.infrastructure.live_runtime_hardening import (
 )
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientLiveInitialOnboardingPortfolioService,
+)
+from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
 )
 from jd_holdings.infrastructure.market_clock import MarketClock
