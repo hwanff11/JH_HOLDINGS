@@ -14,12 +14,16 @@ from jd_holdings.application.tp_manager import TakeProfitManager
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
 from jd_holdings.infrastructure.live_runtime_hardening import (
-    HardenedLiveInitialOnboardingPortfolioService,
     HardenedOperationalSafetyTelegramBotApp,
+)
+from jd_holdings.infrastructure.live_runtime_resilience import (
+    ResilientLiveInitialOnboardingPortfolioService as HardenedLiveInitialOnboardingPortfolioService,
+)
+from jd_holdings.infrastructure.live_runtime_resilience import (
+    ResilientReadTossClient as TossClient,
 )
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
-from jd_holdings.infrastructure.toss_client import TossClient
 from jd_holdings.settings import load_runtime_settings
 
 
