@@ -14,12 +14,14 @@ from jd_holdings.application.tp_manager import TakeProfitManager
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
 from jd_holdings.infrastructure.live_runtime_hardening import (
-    HardenedLiveInitialOnboardingPortfolioService,
     HardenedOperationalSafetyTelegramBotApp,
+)
+from jd_holdings.infrastructure.live_runtime_resilience import (
+    ResilientLiveInitialOnboardingPortfolioService,
+    ResilientReadTossClient,
 )
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
-from jd_holdings.infrastructure.toss_client import TossClient
 from jd_holdings.settings import load_runtime_settings
 
 
@@ -52,7 +54,7 @@ def main() -> None:
 
     data_source = YFinanceDataSource(settings.cache_path)
     market_clock = MarketClock()
-    broker = TossClient()
+    broker = ResilientReadTossClient()
     order_manager = OrderManager(repository, broker, settings)
     position_manager = PositionManager(config, repository, broker)
     tp_manager = TakeProfitManager(repository, broker, order_manager)
@@ -74,7 +76,7 @@ def main() -> None:
         position_manager,
         tp_manager,
     )
-    portfolio_service = HardenedLiveInitialOnboardingPortfolioService(
+    portfolio_service = ResilientLiveInitialOnboardingPortfolioService(
         config,
         repository,
         broker,
