@@ -62,7 +62,6 @@ Telegram `/dashboard`에서 휴장 중 QQQ 현재가가 300초보다 오래됐�
 - 네트워크/타임아웃/429/5xx 등 일시 오류는 최대 3회 범위에서 재시도합니다.
 - 재시도로 정상 복구되면 불필요한 SAFE_MODE·운영자 경고로 확대하지 않습니다.
 - 인증·설정 오류처럼 재시도로 해결되지 않는 오류는 즉시 실패 처리합니다.
-- **주문 제출과 주문 취소는 자동 재시도하지 않습니다.** 쓰기 요청의 결과가 불명확하면 기존 UNKNOWN/SAFE_MODE 원칙을 유지합니다.
 
 ### 휴장 대시보드 표시
 
@@ -109,6 +108,15 @@ Telegram `/dashboard`에서 휴장 중 QQQ 현재가가 300초보다 오래됐�
 - 실제 계좌와 원장의 정합성이 확인되기 전 SAFE_MODE 강제해제 금지
 - `/resume`은 깨끗한 재대조로 비활성 SAFE_MODE가 증명될 때만 복구
 - UNKNOWN 주문은 임의 재주문 금지
+
+### 2026-09-01 `401 invalid-token` 반복장애 대응
+
+- Telegram에서 계좌 정합성 점검과 V3.2.2 배분 점검이 `HTTP 401 / invalid-token`으로 반복 실패한 운영 장애를 확인했습니다.
+- 실거래 서비스와 별개인 외부 Oracle health가 같은 client credentials로 `toss-smoke`를 실행해 새 토큰을 발급할 수 있는 구조였고, 이 경우 실행 중인 LIVE runtime 토큰을 무효화할 수 있었습니다.
+- LIVE 외부 health는 더 이상 독립적으로 Toss access token을 발급하지 않습니다. SSH/systemd/SQLite/clock/disk/config 검증은 유지하고, `toss-smoke`는 dry-run에서만 수행합니다.
+- LIVE read-only 계층은 내부 token refresh 직후 동시 조회 경합으로 `invalid-token` 또는 `expired-token`이 한 번 더 남는 경우에 한해 최대 3회 범위의 짧은 재조회로 최신 토큰에 수렴합니다.
+- 주문 생성·취소 등 **쓰기 요청 자동 재시도 금지**는 그대로 유지합니다.
+- 이 수정은 전략·목표비중·주문 산식·V3.2.2 실거래 계약을 변경하지 않습니다.
 
 ## 7. 2026-09-01 첫 투자 운영 계약
 
