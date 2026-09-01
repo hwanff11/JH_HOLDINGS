@@ -129,7 +129,15 @@ jobs:
           PY
 
           "$current/.venv/bin/jdss" --config "$current/strategy.yaml" validate-config
-          "$current/.venv/bin/jdss" --config "$current/strategy.yaml" toss-smoke
+          if [[ "${JDSS_TRADING_MODE}" == "live" ]]; then
+            # Toss client-credentials token 재발급은 이미 실행 중인 LIVE runtime의
+            # 토큰을 무효화할 수 있다. 외부 health process는 독립 token issuer가
+            # 되지 않고 service/DB/config 상태만 확인한다.
+            echo "TOSS_SMOKE=SKIP mode=live reason=runtime-token-isolation"
+          else
+            "$current/.venv/bin/jdss" --config "$current/strategy.yaml" toss-smoke
+            echo "TOSS_SMOKE=PASS mode=dry_run"
+          fi
           echo "ORACLE_HEALTH=PASS mode=${JDSS_TRADING_MODE} sha=$(basename "$current") disk=${disk_use}% drift=${drift}s"
           REMOTE
 
@@ -173,7 +181,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$VERIFY_OUTCOME" == "success" ]]; then
-            body="✅ Oracle 외부 health check PASS. SSH/systemd/SQLite/clock/disk/config/Toss read-only 상태가 정상입니다. LIVE인 경우 commissioning marker와 별도 live DB도 확인했습니다.\n\nActions run: $RUN_URL"
+            body="✅ Oracle 외부 health check PASS. SSH/systemd/SQLite/clock/disk/config 상태가 정상입니다. dry-run은 Toss read-only까지 확인하며, LIVE는 운영 토큰 보호를 위해 별도 Toss 토큰 발급을 하지 않습니다.\n\nActions run: $RUN_URL"
           else
             body="❌ Oracle 외부 health check FAIL. 별도 [oracle-health] incident를 확인해 주세요.\n\nActions run: $RUN_URL"
           fi
