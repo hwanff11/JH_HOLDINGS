@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 
+import jd_holdings.infrastructure.live_runtime_resilience as resilience_module
 from jd_holdings.application.database import SQLiteRepository
+from jd_holdings.core.indicators import MarketDataError
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientLiveInitialOnboardingPortfolioService,
     ResilientReadTossClient,
@@ -162,3 +166,113 @@ def test_live_snapshot_uses_latest_available_price_without_weakening_order_quote
 
     with pytest.raises(TossApiError, match="주문 계산을 중단"):
         broker.get_price("QQQ")
+
+
+class _DailyFrameSource:
+    def __init__(self, fail_symbol: str | None = None) -> None:
+        self.fail_symbol = fail_symbol
+        self.calls: list[str] = []
+        index = pd.to_datetime(["2026-08-28", "2026-08-31", "2026-09-01"])
+        self.frame = pd.DataFrame(
+            {
+                "open": [100.0, 101.0, 102.0],
+                "high": [101.0, 102.0, 103.0],
+                "low": [99.0, 100.0, 101.0],
+                "close": [100.5, 101.5, 102.5],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+            },
+            index=index,
+        )
+
+    def daily(self, symbol, start, end, *, refresh=False):
+        del start, end
+        assert refresh is True
+        symbol = str(symbol).upper()
+        self.calls.append(symbol)
+        if symbol == self.fail_symbol:
+            raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}")
+        return self.frame.copy()
+
+
+class _FakeStrategyEngine:
+    soxl_sector_data = None
+
+    def __init__(self, config) -> None:
+        del config
+
+    def run(self, symbol, symbol_data, spy_data, qqq_data, **kwargs):
+        del symbol_data, spy_data, qqq_data
+        if symbol == "SOXL":
+            type(self).soxl_sector_data = kwargs.get("sector_data")
+        return object()
+
+
+def _fake_targets(qqq, rs, tqqq_active, soxl_active, policy):
+    del rs, tqqq_active, soxl_active, policy
+    timestamp = qqq.index[-1]
+    return pd.DataFrame(
+        [
+            {
+                "leverage": 1.0,
+                "semiconductor_active": True,
+                "jdss_tqqq_active": False,
+                "jdss_soxl_active": False,
+                "QQQ": 0.75,
+                "TQQQ": 0.125,
+                "SOXL": 0.125,
+            }
+        ],
+        index=[timestamp],
+    )
+
+
+def test_live_allocation_warns_and_uses_soxx_when_optional_smh_is_unavailable(
+    tmp_path,
+    config,
+    monkeypatch,
+):
+    repository = SQLiteRepository(tmp_path / "smh-optional.db", config)
+    source = _DailyFrameSource(fail_symbol="SMH")
+    _FakeStrategyEngine.soxl_sector_data = None
+    monkeypatch.setattr(resilience_module, "StrategyBacktestEngine", _FakeStrategyEngine)
+    monkeypatch.setattr(
+        resilience_module,
+        "virtual_active_series",
+        lambda _result, index: pd.Series(True, index=index, dtype=bool),
+    )
+    monkeypatch.setattr(resilience_module, "replay_targets", _fake_targets)
+    service = ResilientLiveInitialOnboardingPortfolioService(
+        config,
+        repository,
+        object(),
+        None,
+        source,
+        None,
+        trading_mode="live",
+    )
+
+    raw, target = service._calculate_target(date(2026, 9, 1))
+
+    assert "SOXX" in raw
+    assert "SMH" not in raw
+    assert source.calls.count("SMH") == 1
+    assert _FakeStrategyEngine.soxl_sector_data is not None
+    assert set(_FakeStrategyEngine.soxl_sector_data) == {"SOXX"}
+    assert not target.empty
+
+
+def test_live_allocation_keeps_required_soxx_fail_closed(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "soxx-required.db", config)
+    source = _DailyFrameSource(fail_symbol="SOXX")
+    service = ResilientLiveInitialOnboardingPortfolioService(
+        config,
+        repository,
+        object(),
+        None,
+        source,
+        None,
+        trading_mode="live",
+    )
+
+    with pytest.raises(MarketDataError, match="yfinance 일봉 조회 실패: SOXX"):
+        service._calculate_target(date(2026, 9, 1))
