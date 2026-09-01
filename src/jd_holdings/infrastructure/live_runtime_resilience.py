@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, TypeVar
 
@@ -11,7 +12,13 @@ from jd_holdings.application.managed_account import (
     marked_managed_equity,
     raw_managed_cash_balance,
 )
-from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
+from jd_holdings.backtest.strategy_engine import StrategyBacktestEngine
+from jd_holdings.core.indicators import MarketDataError
+from jd_holdings.core.v322_allocation import (
+    ALLOCATION_SYMBOLS,
+    replay_targets,
+    virtual_active_series,
+)
 
 from .live_runtime_hardening import HardenedLiveInitialOnboardingPortfolioService
 from .toss_client import TossApiError, TossClient
@@ -164,7 +171,107 @@ class _DisplayQuoteBroker:
 class ResilientLiveInitialOnboardingPortfolioService(
     HardenedLiveInitialOnboardingPortfolioService
 ):
-    """Keep strict execution quotes while making read-only portfolio views resilient."""
+    """Keep strict execution data while making live read paths/provider noise resilient."""
+
+    def _calculate_target(self, completed):
+        """Honor SOXL sector-guard missing-data policy during LIVE allocation.
+
+        V3.2.2 requires SOXX for the RS6M allocation itself, so a SOXX failure still
+        fails closed. SMH is only the secondary SOXL sector-guard benchmark and the
+        configured policy is ``warn_and_allow``. A temporary SMH/Yahoo outage must
+        therefore use the available benchmark(s) instead of aborting the whole daily
+        allocation cycle and repeating Telegram errors every cooldown window.
+
+        The target replay below intentionally mirrors PortfolioService._calculate_target;
+        only optional sector-benchmark loading differs.
+        """
+        strategy_start = datetime.fromisoformat(self.config.backtest.default_start).date()
+        warmup_start = strategy_start - timedelta(days=420)
+
+        required_symbols = (
+            "SPY",
+            "QQQ",
+            "TQQQ",
+            "SOXL",
+            self.policy.rs_benchmark,
+        )
+        raw: dict[str, Any] = {}
+        for symbol in dict.fromkeys(required_symbols):
+            raw[symbol] = self.data_source.daily(
+                symbol,
+                warmup_start,
+                completed,
+                refresh=True,
+            )
+
+        guard = self.config.market_regime.get("soxl_sector_guard", {})
+        guard_candidates = tuple(
+            str(value).upper()
+            for value in guard.get("benchmark_candidates", ("SOXX", "SMH"))
+        )
+        if guard.get("enabled", False):
+            missing_policy = str(
+                guard.get("missing_data_policy", "warn_and_allow")
+            ).lower()
+            for benchmark in guard_candidates:
+                if benchmark in raw:
+                    continue
+                try:
+                    raw[benchmark] = self.data_source.daily(
+                        benchmark,
+                        warmup_start,
+                        completed,
+                        refresh=True,
+                    )
+                except MarketDataError as exc:
+                    if missing_policy != "warn_and_allow":
+                        raise
+                    self.repository.log_event(
+                        "WARNING",
+                        "SOXL_SECTOR_DATA_MISSING",
+                        f"{benchmark} 보조 섹터 일봉 조회 실패로 사용 가능한 기준만 적용합니다",
+                        symbol="SOXL",
+                        context={
+                            "benchmark": benchmark,
+                            "trade_date": completed.isoformat(),
+                            "error": str(exc),
+                        },
+                    )
+
+        sector_data = {
+            name: raw[name]
+            for name in guard_candidates
+            if name in raw
+        }
+        engine = StrategyBacktestEngine(self.config)
+        virtual_results = {
+            symbol: engine.run(
+                symbol,
+                raw[symbol],
+                raw["SPY"],
+                raw["QQQ"],
+                start=strategy_start,
+                end=completed,
+                slippage=self.config.backtest.default_slippage,
+                sector_data=sector_data if symbol == "SOXL" else None,
+            )
+            for symbol in self.config.enabled_symbols
+        }
+        common = raw["QQQ"].index
+        for symbol in ("TQQQ", "SOXL", self.policy.rs_benchmark):
+            common = common.intersection(raw[symbol].index)
+        active = {
+            symbol: virtual_active_series(virtual_results[symbol], common)
+            for symbol in self.config.enabled_symbols
+        }
+        targets = replay_targets(
+            raw["QQQ"].reindex(common),
+            raw[self.policy.rs_benchmark].reindex(common),
+            active["TQQQ"],
+            active["SOXL"],
+            self.policy,
+        )
+        return raw, targets
 
     def snapshot(self) -> dict[str, object]:
         display_broker = _DisplayQuoteBroker(self.broker)
