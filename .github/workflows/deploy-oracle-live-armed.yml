@@ -63,7 +63,8 @@ jobs:
             tests/test_operational_safety.py \
             tests/test_deployment_contract.py \
             tests/test_toss_client.py \
-            tests/test_live_runtime_resilience.py
+            tests/test_live_runtime_resilience.py \
+            tests/test_oracle_health_token_isolation.py
           jdss validate-config
           grep -q 'live_enabled: false' strategy.yaml
           grep -q 'jdss-bot = "jd_holdings.runtime:main"' pyproject.toml

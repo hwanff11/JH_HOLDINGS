@@ -169,6 +169,13 @@ rollback까지 실패하면 정상으로 추정하지 않고 **신규 BUY 금지
 
 read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run 보유가 실제 계좌와 일치했다는 뜻이 아닙니다.
 
+실거래에서는 토큰 발급 자체도 운영경계입니다.
+
+- client credentials로 새 access token을 발급하면 같은 credentials의 기존 운영 토큰이 무효화될 수 있으므로 **실거래 서비스가 실행 중인 동안 외부 health process가 `toss-smoke`를 실행하지 않습니다.**
+- LIVE authenticated smoke는 서비스 정지·기동과 직렬화된 배포 구간 또는 운영 프로그램 자체의 조회경계에서만 수행합니다.
+- 정기 외부 health는 LIVE에서 SSH/systemd/SQLite/clock/disk/config를 확인하고 Toss 토큰을 새로 발급하지 않습니다.
+- dry-run은 별도 live runtime token을 보호할 필요가 없으므로 기존 `toss-smoke`를 유지합니다.
+
 ## 9. 배포 후 검증
 
 ### source/runtime
@@ -180,8 +187,8 @@ read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run �
 
 ### 안전 잠금
 
-- forced dry-run
-- 빈 live confirmation
+- forced dry-run 또는 승인된 live commissioning 상태
+- live면 신규 BUY 잠금 상태 확인
 - `portfolio.live_enabled=false`
 - application live hard lock
 
@@ -190,12 +197,14 @@ read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run �
 - service active
 - startup error 없음
 - SQLite schema/init 호환성
-- dry-run broker/SQLite reconciliation
+- 현재 모드에 맞는 broker/SQLite reconciliation
 - SAFE_MODE 상태 확인
 
 ### 외부 read-only
 
-- Toss 인증·시세·시장상태 smoke
+- dry-run: Toss 인증·시세·시장상태 smoke
+- live: 외부 health는 독립 Toss token을 발급하지 않고 service/DB/config 상태를 확인
+- live authenticated Toss 확인이 필요하면 배포의 직렬화된 smoke 또는 운영 프로그램의 조회 결과를 사용
 - Telegram bot identity/outbound smoke
 
 ### Telegram 운영 화면
@@ -220,7 +229,7 @@ read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run �
 - restart 후 service active
 - config validation
 - 저장 target_qty·열린 주문 복구
-- dry-run reconciliation
+- 현재 모드에 맞는 reconciliation
 - SAFE_MODE 확인
 
 시장 세션 때문에 restart를 생략했다면 실패를 숨기지 않고 `CURRENT_WORK.md`의 다음 검증 항목으로 남깁니다.
@@ -232,7 +241,7 @@ read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run �
 3. 복원 DB와 config/schema 호환성
 4. 불명확한 주문을 수동 성공처리하지 않음
 5. reconciliation
-6. Toss read-only smoke
+6. dry-run은 Toss read-only smoke, live는 별도 token issuer를 만들지 않는 직렬화된 Toss 확인
 7. Telegram 상태 확인
 
 ## 12. GitHub Actions와 변경통제
@@ -255,7 +264,7 @@ read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run �
 - DB와 rollback 가능성 확인
 - forced dry-run/live lock 유지
 - 원장 정합성 확인
-- Toss read-only 경계 확인
+- 현재 모드에 맞는 Toss read-only 경계 확인
 - 필요한 Telegram smoke 확인
 
 그리고 **배포 성공은 live 활성화 승인이 아닙니다.**

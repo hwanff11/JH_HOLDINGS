@@ -27,9 +27,15 @@ def _retryable_read_error(exc: TossApiError) -> bool:
 
     Network/timeout/429/5xx failures are explicitly marked retryable by TossClient.
     A malformed successful 2xx read response is also safe to retry because the
-    operation has no side effect. Authentication/configuration errors remain fail-fast.
+    operation has no side effect. TossClient already performs one bounded token
+    refresh + replay for GET requests; a final invalid/expired token can still occur
+    when concurrent readers observed the same rejected token and refreshed in close
+    succession. Retrying the read lets those callers converge on the newest cached
+    token without ever replaying a write request.
     """
     if exc.retryable:
+        return True
+    if exc.status_code == 401 and exc.code in {"invalid-token", "expired-token"}:
         return True
     status = exc.status_code
     return bool(status is not None and 200 <= status < 300 and "응답" in str(exc))

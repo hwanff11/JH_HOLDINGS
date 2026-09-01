@@ -200,6 +200,8 @@ SAFE_MODE는 단 한 번의 정상 조회만으로 자동 해제하지 않습니
 - Toss read-only 결과를 dry-run 보유에 자동 채택하지 않음
 - dry-run 주문을 실주문으로 자동 변환하지 않음
 - 실제 계좌 조회 실패를 0주·정상으로 해석하지 않음
+- **실거래 운영 프로그램이 실행 중일 때 외부 health process는 `toss-smoke`로 별도 access token을 발급하지 않음**
+- 실거래 authenticated smoke가 필요하면 서비스 정지·기동과 직렬화된 배포 구간 또는 운영 프로그램 자체 조회경계에서 수행
 
 같은 Toss 계좌에서 개인 QQQ/TQQQ/SOXL을 JDSS 관리물량과 혼합하지 않습니다. JDSS 주문과 Toss 앱의 동일티커 수동 주문도 동시에 수행하지 않는 것을 운영 원칙으로 합니다.
 
@@ -208,6 +210,9 @@ SAFE_MODE는 단 한 번의 정상 조회만으로 자동 해제하지 않습니
 - 공식 HTTPS base URL 고정
 - 연결·응답 timeout
 - 401 token refresh 재시도 횟수 제한
+- 동일 client credentials의 독립 프로세스 토큰 재발급은 기존 운영 토큰을 무효화할 수 있으므로 LIVE 중 독립 token issuer를 만들지 않음
+- GET 계열 read-only 요청은 내부 token refresh 후에도 `invalid-token`·`expired-token`이 남는 동시경합에 한해 짧고 제한적으로 다시 조회할 수 있음
+- 주문 생성·취소 등 쓰기 요청은 401이나 결과 불명 상태에서 자동 재제출하지 않음
 - 성공 응답도 JSON 구조·필수값·수치 범위·주문 상태 검증
 - 현재가 응답의 종목·가격·시각·시간대 검증
 - 응답 시각이 5분보다 오래되거나 2분 이상 미래면 주문 계산 차단
