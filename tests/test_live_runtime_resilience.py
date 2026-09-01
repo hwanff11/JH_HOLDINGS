@@ -36,6 +36,67 @@ def test_read_only_toss_noise_is_retried_and_recovers(monkeypatch):
     assert calls == 3
 
 
+def test_read_only_invalid_token_after_refresh_race_is_retried(monkeypatch):
+    client = ResilientReadTossClient(client_id="key", client_secret="secret")
+    calls = 0
+
+    def fake_get_holdings(self, symbol=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TossApiError(
+                "유효하지 않은 토큰입니다.",
+                status_code=401,
+                code="invalid-token",
+                retryable=False,
+            )
+        return []
+
+    monkeypatch.setattr(TossClient, "get_holdings", fake_get_holdings)
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.live_runtime_resilience.time.sleep",
+        lambda _seconds: None,
+    )
+
+    assert client.get_holdings() == []
+    assert calls == 2
+
+
+def test_expired_token_read_is_retried_but_other_auth_error_fails_fast(monkeypatch):
+    client = ResilientReadTossClient(client_id="key", client_secret="secret")
+    calls = 0
+
+    def fake_get_accounts(self):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TossApiError(
+                "액세스 토큰이 만료되었습니다.",
+                status_code=401,
+                code="expired-token",
+            )
+        return []
+
+    monkeypatch.setattr(TossClient, "get_accounts", fake_get_accounts)
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.live_runtime_resilience.time.sleep",
+        lambda _seconds: None,
+    )
+    assert client.get_accounts() == []
+    assert calls == 2
+
+    def invalid_client(self):
+        raise TossApiError(
+            "클라이언트 인증 실패",
+            status_code=401,
+            code="invalid-client",
+        )
+
+    monkeypatch.setattr(TossClient, "get_accounts", invalid_client)
+    with pytest.raises(TossApiError, match="클라이언트 인증 실패"):
+        client.get_accounts()
+
+
 def test_nonretryable_read_error_fails_fast(monkeypatch):
     client = ResilientReadTossClient(client_id="key", client_secret="secret")
     calls = 0
