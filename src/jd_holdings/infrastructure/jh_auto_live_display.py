@@ -50,6 +50,20 @@ class LiveJHAutoTelegramBotApp(JHAutoTelegramBotApp):
             return text
         return text.replace(marker, f"{extra}\n{marker}", 1)
 
+    @staticmethod
+    def _dedupe_dashboard_capital_lines(text: str) -> str:
+        """Show capital-reduction pending amount once even if a legacy view repeats it."""
+        prefix = "• 자금축소 회수대기 :"
+        seen = False
+        lines: list[str] = []
+        for line in text.splitlines():
+            if line.startswith(prefix):
+                if seen:
+                    continue
+                seen = True
+            lines.append(line)
+        return "\n".join(lines)
+
     def _normalize_inherited_auto_text(self, text: str) -> str:
         """Remove stale semi-auto guidance from inherited live messages."""
         replacements = (
@@ -152,7 +166,8 @@ class LiveJHAutoTelegramBotApp(JHAutoTelegramBotApp):
         return text
 
     def _format_auto_dashboard(self) -> str:
-        text = self._replace_hwm_lines(super()._format_auto_dashboard())
+        text = self._dedupe_dashboard_capital_lines(super()._format_auto_dashboard())
+        text = self._replace_hwm_lines(text)
         text = self._insert_before(
             text,
             "🛡️ <b>안전상태</b>",
