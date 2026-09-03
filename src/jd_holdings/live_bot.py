@@ -10,19 +10,18 @@ from jd_holdings.application.jh_auto_runtime_services import (
 )
 from jd_holdings.application.live_commissioning import arm_live_startup_buy_halt
 from jd_holdings.application.order_manager import OrderManager
-from jd_holdings.application.order_monitor import OrderMonitor
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
-from jd_holdings.automation.prelive_hardening import (
-    HardenedProductionJHAutoService as ProductionJHAutoService,
-)
+from jd_holdings.automation.final_ops_hardening import FinalOpsProductionJHAutoService
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
-from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
-from jd_holdings.infrastructure.live_runtime_resilience import (
-    ResilientLiveInitialOnboardingPortfolioService as HardenedLiveInitialOnboardingPortfolioService,
+from jd_holdings.infrastructure.final_ops_runtime import (
+    FinalOpsLiveInitialOnboardingPortfolioService,
+    FinalOpsOrderMonitor,
+    LiveRuntimeLock,
 )
+from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
 )
@@ -31,13 +30,7 @@ from jd_holdings.infrastructure.market_data import YFinanceDataSource
 from jd_holdings.settings import load_runtime_settings
 
 
-def main() -> None:
-    """Run commissioned live JDSS strategy with JH AUTO fail-closed execution."""
-    settings = load_runtime_settings()
-    if settings.trading_mode != "live":
-        raise RuntimeError("live runtime entrypoint는 JDSS_TRADING_MODE=live에서만 실행할 수 있습니다")
-    settings.require_live_trading()
-
+def _run_locked_live(settings) -> None:
     config = load_config(settings.config_path)
     if not config.portfolio.enabled:
         raise RuntimeError("V3.2.2 portfolio가 비활성화되어 있습니다")
@@ -48,13 +41,11 @@ def main() -> None:
     # Install AUTO schema/state before arming the low-level BUY barrier. Bootstrap is
     # deliberately fail-closed: launch_authorized=0, effective principal=0 and
     # startup_quarantine=1 on the first deployment. Deployment alone can never buy.
-    ProductionJHAutoService.bootstrap_repository(repository)
-    # Process-local requirement: even if every AUTO DB key is later deleted/corrupted,
-    # the final live BUY boundary must never fall back to the legacy $50k reference.
+    FinalOpsProductionJHAutoService.bootstrap_repository(repository)
     mark_repository_as_jh_auto_live(repository)
 
-    # Keep the proven broker-boundary halt. Under JH AUTO this low-level flag is the
-    # mechanism used by both startup quarantine and the explicit operator halt latch.
+    # Every process start closes BUY first. JH AUTO may reopen only after a later
+    # independent reconciliation cycle proves the runtime clean.
     arm_live_startup_buy_halt(repository)
 
     recovered_core_fills = recover_unapplied_core_fills(repository)
@@ -80,15 +71,16 @@ def main() -> None:
         market_clock,
         None,
     )
-    order_monitor = OrderMonitor(
+    order_monitor = FinalOpsOrderMonitor(
         config,
         repository,
         broker,
         order_manager,
         position_manager,
         tp_manager,
+        market_clock,
     )
-    portfolio_service = HardenedLiveInitialOnboardingPortfolioService(
+    portfolio_service = FinalOpsLiveInitialOnboardingPortfolioService(
         config,
         repository,
         broker,
@@ -98,7 +90,7 @@ def main() -> None:
         trading_mode=settings.trading_mode,
     )
     reconciliation_service = ReconciliationService(config, repository, broker)
-    auto_service = ProductionJHAutoService(
+    auto_service = FinalOpsProductionJHAutoService(
         config,
         repository,
         broker,
@@ -130,6 +122,19 @@ def main() -> None:
     if mismatches:
         app.notify_startup_reconciliation(mismatches)
     app.run()
+
+
+def main() -> None:
+    """Run commissioned live JDSS strategy with JH AUTO fail-closed execution."""
+    settings = load_runtime_settings()
+    if settings.trading_mode != "live":
+        raise RuntimeError("live runtime entrypoint는 JDSS_TRADING_MODE=live에서만 실행할 수 있습니다")
+    settings.require_live_trading()
+
+    # systemd normally guarantees one process, but the ledger lock also blocks an
+    # accidental manual second process from running schedulers against the same DB.
+    with LiveRuntimeLock(settings.database_path):
+        _run_locked_live(settings)
 
 
 if __name__ == "__main__":
