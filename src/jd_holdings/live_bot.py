@@ -14,7 +14,9 @@ from jd_holdings.application.order_monitor import OrderMonitor
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
-from jd_holdings.automation.prelive_hardening import HardenedProductionJHAutoService
+from jd_holdings.automation.prelive_hardening import (
+    HardenedProductionJHAutoService as ProductionJHAutoService,
+)
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
 from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
@@ -46,7 +48,7 @@ def main() -> None:
     # Install AUTO schema/state before arming the low-level BUY barrier. Bootstrap is
     # deliberately fail-closed: launch_authorized=0, effective principal=0 and
     # startup_quarantine=1 on the first deployment. Deployment alone can never buy.
-    HardenedProductionJHAutoService.bootstrap_repository(repository)
+    ProductionJHAutoService.bootstrap_repository(repository)
     # Process-local requirement: even if every AUTO DB key is later deleted/corrupted,
     # the final live BUY boundary must never fall back to the legacy $50k reference.
     mark_repository_as_jh_auto_live(repository)
@@ -96,7 +98,7 @@ def main() -> None:
         trading_mode=settings.trading_mode,
     )
     reconciliation_service = ReconciliationService(config, repository, broker)
-    auto_service = HardenedProductionJHAutoService(
+    auto_service = ProductionJHAutoService(
         config,
         repository,
         broker,
