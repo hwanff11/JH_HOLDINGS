@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from jd_holdings.infrastructure.jh_auto_telegram import _auto_bot_commands
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -67,10 +69,24 @@ def test_live_update_rollback_never_rewinds_db_after_service_start():
 
 def test_live_update_verifies_exact_operator_menu_after_restart():
     script = (ROOT / "deploy_live_armed.sh").read_text(encoding="utf-8")
+    declared = [item.command for item in _auto_bot_commands()]
 
+    assert declared == [
+        "dashboard",
+        "today",
+        "auto",
+        "account",
+        "portfolio",
+        "backtest",
+        "halt",
+        "help",
+    ]
     assert "getMyCommands" in script
-    assert '"dashboard", "today", "account", "portfolio"' in script
-    assert '"backtest", "onboarding", "halt", "help"' in script
+    assert (
+        "from jd_holdings.infrastructure.jh_auto_telegram import _auto_bot_commands"
+        in script
+    )
+    assert "expected = [item.command for item in _auto_bot_commands()]" in script
     assert "TELEGRAM_OPERATOR_MENU=PASS" in script
 
 

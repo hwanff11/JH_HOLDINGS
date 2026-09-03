@@ -82,6 +82,16 @@ def test_live_update_workflow_is_owner_only_latest_main_and_test_gated():
     assert "gh issue comment" in workflow
 
 
+def test_live_update_telegram_smoke_uses_jh_auto_declared_menu():
+    script = (ROOT / "deploy_live_armed.sh").read_text(encoding="utf-8")
+    assert (
+        "from jd_holdings.infrastructure.jh_auto_telegram import _auto_bot_commands"
+        in script
+    )
+    assert "expected = [item.command for item in _auto_bot_commands()]" in script
+    assert '"backtest", "onboarding", "halt", "help"' not in script
+
+
 def test_hourly_health_watch_understands_live_ledger():
     workflow = (ROOT / ".github/workflows/oracle-health-watch.yml").read_text(encoding="utf-8")
     assert "dry_run|live" not in workflow
