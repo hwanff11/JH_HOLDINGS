@@ -4,18 +4,19 @@ import logging
 
 from jd_holdings.application.analysis_service import AnalysisService
 from jd_holdings.application.database import SQLiteRepository
+from jd_holdings.application.jh_auto_runtime_services import (
+    JHAutoLiveAllocationTradingService,
+)
 from jd_holdings.application.live_commissioning import arm_live_startup_buy_halt
-from jd_holdings.application.live_runtime_services import LiveAllocationTradingService
 from jd_holdings.application.order_manager import OrderManager
 from jd_holdings.application.order_monitor import OrderMonitor
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
+from jd_holdings.automation.service import JHAutoService
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
-from jd_holdings.infrastructure.live_runtime_hardening import (
-    HardenedOperationalSafetyTelegramBotApp,
-)
+from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientLiveInitialOnboardingPortfolioService as HardenedLiveInitialOnboardingPortfolioService,
 )
@@ -28,7 +29,7 @@ from jd_holdings.settings import load_runtime_settings
 
 
 def main() -> None:
-    """Run the explicitly commissioned live runtime in fail-closed BUY-HALT mode."""
+    """Run commissioned live JDSS strategy with JH AUTO fail-closed execution."""
     settings = load_runtime_settings()
     if settings.trading_mode != "live":
         raise RuntimeError("live runtime entrypoint는 JDSS_TRADING_MODE=live에서만 실행할 수 있습니다")
@@ -41,10 +42,13 @@ def main() -> None:
     configure_logging(settings.log_path)
     repository = SQLiteRepository(settings.database_path, config)
 
-    # The legacy strategy flag remains false so the normal/default runtime can never
-    # drift into live. Only this explicitly commissioned entrypoint is allowed to use
-    # the real broker. Every process start/restart re-arms BUY halt before TossClient
-    # is constructed, so a previous Telegram resume is never inherited on restart.
+    # Install AUTO schema/state before arming the low-level BUY barrier.  Bootstrap is
+    # deliberately fail-closed: launch_authorized=0, effective principal=0 and
+    # startup_quarantine=1 on the first deployment.  Deployment alone can never buy.
+    JHAutoService.bootstrap_repository(repository)
+
+    # Keep the proven broker-boundary halt.  Under JH AUTO this low-level flag is the
+    # mechanism used by both startup quarantine and the explicit operator halt latch.
     arm_live_startup_buy_halt(repository)
 
     recovered_core_fills = recover_unapplied_core_fills(repository)
@@ -60,7 +64,7 @@ def main() -> None:
     order_manager = OrderManager(repository, broker, settings)
     position_manager = PositionManager(config, repository, broker)
     tp_manager = TakeProfitManager(repository, broker, order_manager)
-    trading_service = LiveAllocationTradingService(
+    trading_service = JHAutoLiveAllocationTradingService(
         config,
         repository,
         broker,
@@ -88,13 +92,21 @@ def main() -> None:
         trading_mode=settings.trading_mode,
     )
     reconciliation_service = ReconciliationService(config, repository, broker)
+    auto_service = JHAutoService(
+        config,
+        repository,
+        broker,
+        reconciliation_service,
+        market_clock,
+    )
+    auto_service.arm_startup_quarantine()
 
     mismatches = reconciliation_service.run()
     if mismatches:
         logging.getLogger(__name__).error("live 시작 정합성 검사 실패: %s", mismatches)
 
     analysis_service = AnalysisService(config, repository, data_source, market_clock)
-    app = HardenedOperationalSafetyTelegramBotApp(
+    app = JHAutoTelegramBotApp(
         config,
         settings,
         repository,
@@ -107,6 +119,7 @@ def main() -> None:
         broker,
         None,
         portfolio_service,
+        auto_service=auto_service,
     )
     if mismatches:
         app.notify_startup_reconciliation(mismatches)
