@@ -13,7 +13,7 @@ from jd_holdings.application.order_monitor import OrderMonitor
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
-from jd_holdings.automation.service import JHAutoService
+from jd_holdings.automation.live_service import ProductionJHAutoService
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
 from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
@@ -42,12 +42,12 @@ def main() -> None:
     configure_logging(settings.log_path)
     repository = SQLiteRepository(settings.database_path, config)
 
-    # Install AUTO schema/state before arming the low-level BUY barrier.  Bootstrap is
+    # Install AUTO schema/state before arming the low-level BUY barrier. Bootstrap is
     # deliberately fail-closed: launch_authorized=0, effective principal=0 and
-    # startup_quarantine=1 on the first deployment.  Deployment alone can never buy.
-    JHAutoService.bootstrap_repository(repository)
+    # startup_quarantine=1 on the first deployment. Deployment alone can never buy.
+    ProductionJHAutoService.bootstrap_repository(repository)
 
-    # Keep the proven broker-boundary halt.  Under JH AUTO this low-level flag is the
+    # Keep the proven broker-boundary halt. Under JH AUTO this low-level flag is the
     # mechanism used by both startup quarantine and the explicit operator halt latch.
     arm_live_startup_buy_halt(repository)
 
@@ -92,7 +92,7 @@ def main() -> None:
         trading_mode=settings.trading_mode,
     )
     reconciliation_service = ReconciliationService(config, repository, broker)
-    auto_service = JHAutoService(
+    auto_service = ProductionJHAutoService(
         config,
         repository,
         broker,
