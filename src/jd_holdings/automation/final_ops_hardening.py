@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from jd_holdings.application.operational_safety import OPERATOR_BUY_HALT_KEY
 from jd_holdings.core.enums import DecisionType
 from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
 
@@ -14,12 +15,7 @@ from .prelive_hardening import (
     MAX_AUTO_SIGNAL_ATTEMPTS_PER_DAY,
     HardenedProductionJHAutoService,
 )
-from .service import (
-    AUTO_LAST_CYCLE_KEY,
-    OPERATOR_BUY_HALT_KEY,
-    TARGET_QTY_GENERATION_KEY,
-    AutoExecutionResult,
-)
+from .service import AUTO_LAST_CYCLE_KEY, TARGET_QTY_GENERATION_KEY, AutoExecutionResult
 
 AUTO_RAMP_STAGE_AUTO_FILL_KEY = "jh_auto_ramp_stage_auto_fill_seen"
 NEW_YORK_TZ = ZoneInfo("America/New_York")
@@ -149,7 +145,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
 
         had_cycle_attr = hasattr(trading_service, "_jh_auto_cycle_id")
         previous_cycle = getattr(trading_service, "_jh_auto_cycle_id", None)
-        setattr(trading_service, "_jh_auto_cycle_id", cycle_id)
+        trading_service._jh_auto_cycle_id = cycle_id
         try:
             review_id, review_token = trading_service.create_review_approval(
                 signal_id, now=current
@@ -196,10 +192,10 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
             return None
         finally:
             if had_cycle_attr:
-                setattr(trading_service, "_jh_auto_cycle_id", previous_cycle)
+                trading_service._jh_auto_cycle_id = previous_cycle
             else:
                 try:
-                    delattr(trading_service, "_jh_auto_cycle_id")
+                    del trading_service._jh_auto_cycle_id
                 except AttributeError:
                     pass
 
