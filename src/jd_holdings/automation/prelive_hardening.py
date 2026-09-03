@@ -13,14 +13,9 @@ from jd_holdings.application.operational_safety import (
 from . import AUTO_VERSION
 from .live_service import ProductionJHAutoService
 from .service import (
-    AUTO_BASE_CAPITAL_KEY,
-    AUTO_EFFECTIVE_PRINCIPAL_KEY,
     AUTO_ENABLED_KEY,
     AUTO_QUARANTINE_KEY,
-    AUTO_RATIO_KEY,
-    AUTO_RAMP_BASE_KEY,
     AUTO_STATE_KEY,
-    AUTO_TARGET_PRINCIPAL_KEY,
     AUTO_VERSION_KEY,
     MAX_BASE_CAPITAL,
     MAX_RATIO,
@@ -41,13 +36,22 @@ class HardenedProductionJHAutoService(ProductionJHAutoService):
     old/new capital state. The next clean safety cycle must prove consistency again.
     """
 
-    def _validate_capital_contract(self) -> None:
+    def _validate_capital_contract(self, *, require_configured: bool = True) -> None:
         settings = self.settings()
         if self.repository.get_system_value(AUTO_ENABLED_KEY) != "1":
             raise RuntimeError("JH AUTO 활성상태가 누락·손상되었습니다")
         if self.repository.get_system_value(AUTO_VERSION_KEY) != AUTO_VERSION:
             raise RuntimeError("JH AUTO 버전 상태가 현재 코드와 일치하지 않습니다")
-        if settings.base_capital is None or not MIN_BASE_CAPITAL <= settings.base_capital <= MAX_BASE_CAPITAL:
+
+        if not settings.configured:
+            if require_configured:
+                raise RuntimeError("JH AUTO 총 투자금액과 자동운용비율 설정이 완전하지 않습니다")
+            return
+
+        if (
+            settings.base_capital is None
+            or not MIN_BASE_CAPITAL <= settings.base_capital <= MAX_BASE_CAPITAL
+        ):
             raise RuntimeError("JH AUTO 총 투자금액 상태가 유효하지 않습니다")
         if settings.ratio is None or not MIN_RATIO <= settings.ratio <= MAX_RATIO:
             raise RuntimeError("JH AUTO 자동운용비율 상태가 유효하지 않습니다")
@@ -71,7 +75,7 @@ class HardenedProductionJHAutoService(ProductionJHAutoService):
         before = self.settings()
         if not before.launch_authorized:
             updated = super()._set_operator_config(base=base, ratio=ratio)
-            self._validate_capital_contract()
+            self._validate_capital_contract(require_configured=False)
             return updated
 
         # Once live authorization exists, capital changes are a safety-critical state
@@ -146,7 +150,10 @@ class HardenedProductionJHAutoService(ProductionJHAutoService):
         next_day = day_start + timedelta(days=1)
         for row in rows:
             signal_id = row["signal_id"]
-            if signal_id is None or int(row["cnt"]) < MAX_AUTO_SIGNAL_ATTEMPTS_PER_DAY:
+            if (
+                signal_id is None
+                or int(row["cnt"]) < MAX_AUTO_SIGNAL_ATTEMPTS_PER_DAY
+            ):
                 continue
             self.repository.set_system_value(
                 f"jh_auto_retry_after:{int(signal_id)}", next_day.isoformat()
