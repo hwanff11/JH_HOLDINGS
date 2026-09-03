@@ -8,7 +8,7 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- Oracle 실거래 runtime 배포본: **`e0d23d25e0e7b76781f7c0a65fbb8a7275ddb635`**
+- Oracle 실거래 runtime 배포본: **`29333dcbaa2776a897059d13c0e9f9191560693e`**
 - Oracle 서비스: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - 실거래 준비 완료 표시(`live_commissioned`): **ON**
@@ -22,7 +22,7 @@
 - 위험축소 SELL: **자동**, 불확실 상태에서는 안전정지와 계좌·원장 대조 우선
 - UNKNOWN 주문: **자동 재전송 금지**
 
-현재 runtime은 PR #324 병합본과 일치합니다. 이후 문서-only 상태판 변경은 Oracle runtime 재배포 대상이 아닙니다.
+현재 runtime은 PR #327 Telegram 조회 최적화 병합본과 일치합니다. 이후 문서-only 상태판 변경은 Oracle runtime 재배포 대상이 아닙니다.
 
 ## 2. JH AUTO 1.0.0 반영 완료
 
@@ -38,7 +38,7 @@ PR #312에서 JDSS 3.2.2 투자전략 수학은 유지하고 다음 실행 책�
 
 자동 BUY는 기존 `TradingService → OrderManager` 최종 주문 안전경계를 우회하지 않습니다.
 
-## 3. 2026-09-03 실거래 안전강화·최종 운영리스크 보완
+## 3. 2026-09-03 실거래 안전강화·운영 최적화
 
 PR #316에서 실거래 전 안전강화를 반영했고, 첫 배포에서 **Telegram 메뉴 검증 스크립트가 과거 `/onboarding` 메뉴를 하드코딩한 문제**가 발견되어 배포가 fail-closed로 중단·자동복구되었습니다. 실제 JH AUTO 운영자 메뉴는 `/auto`를 사용하므로 PR #318에서 배포 smoke check가 JH AUTO 코드의 `_auto_bot_commands()`를 단일 기준으로 사용하도록 수정하고 회귀테스트를 추가했습니다.
 
@@ -66,9 +66,26 @@ PR #316에서 실거래 전 안전강화를 반영했고, 첫 배포에서 **Tel
 - 시스템 임시격리와 대표 `/halt` 지속정지를 문서상 명확히 분리
 - LIVE entrypoint에서 전용 JH AUTO 표시 보호계층 사용
 
-PR #324 head `7054b3b8c4a1b0b1ab525d34e3a99b5719f6d28a`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `e0d23d25e0e7b76781f7c0a65fbb8a7275ddb635`입니다. 병합 후 main Quality Gate와 Security도 통과했습니다.
+PR #324 head `7054b3b8c4a1b0b1ab525d34e3a99b5719f6d28a`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `e0d23d25e0e7b76781f7c0a65fbb8a7275ddb635`입니다. 해당 버전은 Oracle LIVE-ARMED에 정상 배포되었습니다.
 
-Oracle LIVE-ARMED 배포는 GitHub Issue #325 / Actions run `33739907082`에서 성공했습니다.
+### PR #327 — Telegram 조회 응답속도 최적화
+
+실운영 전 Telegram 명령 지연을 다시 추적해, long polling 주기가 아니라 `/dashboard`, `/today`, `/portfolio` 표시를 만들 때 동일 시세와 portfolio snapshot을 반복 조회하는 것이 주된 불필요 호출원임을 확인했습니다.
+
+PR #327에서 다음을 적용했습니다.
+
+- QQQ/TQQQ/SOXL 표시용 시세를 종목별 반복 GET 대신 **한 번의 묶음 조회**로 생성
+- 같은 Telegram 명령 내부의 반복 snapshot과 매우 빠른 후속 조회를 **1초 표시 전용 캐시**로 통합
+- 캐시 반환값을 deep copy하여 화면 가공이 캐시 원본을 변경하지 못하도록 보호
+- allocation 실행 후 표시 캐시 즉시 무효화
+- 표시 snapshot 생성이 0.75초 이상 걸리면 서버 로그에 소요시간을 기록해 향후 병목 추적 가능
+- 묶음조회 1회, 단기캐시 재사용, 캐시 무효화를 회귀테스트로 고정
+
+이 캐시는 **Telegram 읽기 화면에만 사용**합니다. OrderManager, 주문수량·주문가격, 매수가능금액 확인, reconciliation, SAFE_MODE, 대표 `/halt`, 최초 시작승인에는 사용하지 않으므로 매매 안전성과 주문 시세 신선도 계약은 변경하지 않았습니다.
+
+PR #327 head `d9774f128bfe1d004103e893059d9acba8936539`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `29333dcbaa2776a897059d13c0e9f9191560693e`입니다. 병합 후 `main` Quality Gate와 Security도 통과했습니다.
+
+Oracle LIVE-ARMED 배포는 GitHub Issue #328 / Actions run `33744473969`에서 성공했고, 실제 runtime은 `29333dcbaa2776a897059d13c0e9f9191560693e`입니다.
 
 최종 배포 검증 결과:
 
@@ -114,7 +131,7 @@ JH AUTO는 한 안전주기에서 신규 BUY를 최대 1건만 실행합니다. 
 
 ## 6. 바로 다음 작업
 
-코드·문서·실운영 배포·실거래 안전검증까지 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
+코드·문서·실운영 배포·실거래 안전검증·Telegram 조회 최적화까지 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
 
 Telegram에서 다음 순서로 진행합니다.
 
