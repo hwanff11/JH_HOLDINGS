@@ -84,7 +84,8 @@ def test_mutable_runtime_status_has_single_source():
     docs_readme = (ROOT / "docs/README.md").read_text(encoding="utf-8")
     workflow = (ROOT / "docs/infra/DEVELOPMENT_WORKFLOW.md").read_text(encoding="utf-8")
 
-    assert "릴리즈·배포 버전·Oracle 동기화 여부·실거래 잠금 상태" in readme
+    assert "현재 실제 배포·시작승인 상태" in readme
+    assert "CURRENT_WORK.md" in readme
     assert "현재 브랜치·배포·다음 작업" in docs_readme
     assert "branch와 마지막 commit" in workflow
     assert "## 현재 운영 기준" not in docs_readme
@@ -105,7 +106,7 @@ def test_history_preserves_representative_versions_and_rejected_candidate():
         assert version in history
     assert "SEMIMONTHLY_BAND_H05" in history
     assert "월간 코어 + 5% 부스터" in history
-    assert "JDSS V3.2.2" in guide
+    assert "JDSS 3.2.2" in guide
 
 
 def test_one_page_report_and_guide_cover_required_plain_language_topics():
@@ -124,9 +125,9 @@ def test_one_page_report_and_guide_cover_required_plain_language_topics():
         "flowchart",
         "HWM75",
         "RS6M",
-        "주문 묶음 검토",
-        "매수 후보",
-        "최종 승인",
+        "자동매수 후보",
+        "JH AUTO 내부 2단계 검증",
+        "정규장",
         "64.29%",
     ):
         assert required in guide
@@ -141,10 +142,38 @@ def test_onboarding_contract_lives_in_existing_current_documents():
     assert "50%" in spec and "75%" in spec and "100%" in spec
     assert "stale 버튼" in spec
     assert "/onboarding" in telegram
-    assert "버튼" in telegram
+    assert "자금투입 50→75→100" in telegram
     assert "버튼 응답" in docs_readme
     assert not (ROOT / "docs/INITIAL_ONBOARDING.md").exists()
     assert "INITIAL_ONBOARDING.md" not in docs_readme
+
+
+def test_jh_auto_live_capital_and_launch_contract_is_explicit():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    telegram = (ROOT / "docs/TELEGRAM_BOT_GUIDE.md").read_text(encoding="utf-8")
+    messages = (ROOT / "docs/TELEGRAM_LIVE_MESSAGE_STANDARD.md").read_text(encoding="utf-8")
+    security = (ROOT / "docs/infra/SECURITY.md").read_text(encoding="utf-8")
+    commissioning = (ROOT / "docs/infra/LIVE_COMMISSIONING.md").read_text(encoding="utf-8")
+    text = "\n".join((readme, telegram, messages, security, commissioning))
+
+    for required in (
+        "JDSS 3.2.2",
+        "JH AUTO 1.0.0",
+        "공식 연구·백테스트",
+        "운용 기준자금",
+        "자동운용비율",
+        "현재 허용원금",
+        "HWM75 현재 위험예산",
+        "/auto start",
+        "주문 0건",
+        "개별 BUY",
+        "/halt",
+        "자동해제",
+    ):
+        assert required in text
+
+    assert "JDSS 연구 기준 `$50,000` = 실거래 고정한도" in messages
+    assert "최초 시작 전 legacy HWM `$50,000` = 현재 HWM75 위험예산" in messages
 
 
 def test_public_markdown_omits_operational_identifiers():
