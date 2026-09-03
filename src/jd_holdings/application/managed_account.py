@@ -23,6 +23,7 @@ AUTO_ACCOUNTING_STARTED_AT_KEY = "jh_auto_accounting_started_at"
 AUTO_LAUNCH_AUTHORIZED_KEY = "jh_auto_launch_authorized"
 AUTO_QUARANTINE_KEY = "jh_auto_startup_quarantine"
 AUTO_OPERATOR_HALT_LATCH_KEY = "jh_auto_operator_halt_latched"
+AUTO_STATE_KEY = "jh_auto_state"
 
 
 def _system_text(connection: Any, key: str) -> str | None:
@@ -34,9 +35,7 @@ def _auto_enabled(connection: Any) -> bool:
     return _system_text(connection, AUTO_ENABLED_KEY) == "1"
 
 
-def _effective_initial_capital_from_connection(
-    config: StrategyConfig, connection: Any
-) -> Decimal:
+def _effective_initial_capital_from_connection(config: StrategyConfig, connection: Any) -> Decimal:
     """Return capital currently delegated to the execution layer.
 
     The JDSS strategy contract remains anchored to the canonical 50k research
@@ -56,9 +55,7 @@ def _effective_initial_capital_from_connection(
     return value
 
 
-def _raw_managed_cash_from_connection(
-    config: StrategyConfig, connection: Any
-) -> Decimal:
+def _raw_managed_cash_from_connection(config: StrategyConfig, connection: Any) -> Decimal:
     """Reconstruct all USD cash owned by the active JDSS/JH AUTO ledger."""
     balance = _effective_initial_capital_from_connection(config, connection)
     auto_mode = _auto_enabled(connection)
@@ -97,9 +94,7 @@ def _raw_managed_cash_from_connection(
     return balance
 
 
-def _managed_cost_basis_from_connection(
-    config: StrategyConfig, connection: Any
-) -> Decimal:
+def _managed_cost_basis_from_connection(config: StrategyConfig, connection: Any) -> Decimal:
     """Return capital currently deployed by JDSS-owned positions."""
     booster_rows = connection.execute("SELECT current_cost_basis FROM positions").fetchall()
     core_rows = connection.execute("SELECT cost_basis FROM core_positions").fetchall()
@@ -131,9 +126,7 @@ def _risk_budget_from_connection(config: StrategyConfig, connection: Any) -> Dec
     return _system_decimal(connection, RISK_BUDGET_KEY, initial)
 
 
-def _reserved_open_buy_from_connection(
-    config: StrategyConfig, connection: Any
-) -> Decimal:
+def _reserved_open_buy_from_connection(config: StrategyConfig, connection: Any) -> Decimal:
     placeholders = ",".join("?" for _ in OPEN_ORDER_STATUSES)
     rows = connection.execute(
         f"""
@@ -148,17 +141,11 @@ def _reserved_open_buy_from_connection(
         remaining = max(0, int(row["qty"]) - int(row["filled_qty"]))
         if remaining <= 0:
             continue
-        reserved += (
-            Decimal(remaining)
-            * Decimal(str(row["price"]))
-            * (Decimal("1") + config.global_.buy_fee)
-        )
+        reserved += Decimal(remaining) * Decimal(str(row["price"])) * (Decimal("1") + config.global_.buy_fee)
     return reserved
 
 
-def _committed_core_buy_quantity_from_connection(
-    connection: Any, symbol: str
-) -> int:
+def _committed_core_buy_quantity_from_connection(connection: Any, symbol: str) -> int:
     """Return core BUY shares that are ordered or filled but not in the core ledger."""
     rows = connection.execute(
         """
@@ -182,16 +169,12 @@ def _committed_core_buy_quantity_from_connection(
     return committed
 
 
-def raw_managed_cash_balance(
-    config: StrategyConfig, repository: SQLiteRepository
-) -> Decimal:
+def raw_managed_cash_balance(config: StrategyConfig, repository: SQLiteRepository) -> Decimal:
     with repository.transaction() as connection:
         return _raw_managed_cash_from_connection(config, connection)
 
 
-def managed_principal_cost_basis(
-    config: StrategyConfig, repository: SQLiteRepository
-) -> Decimal:
+def managed_principal_cost_basis(config: StrategyConfig, repository: SQLiteRepository) -> Decimal:
     with repository.transaction() as connection:
         return _managed_cost_basis_from_connection(config, connection)
 
@@ -252,16 +235,12 @@ def record_v322_equity(
     return high_water, risk_budget
 
 
-def reserved_open_buy_amount(
-    config: StrategyConfig, repository: SQLiteRepository
-) -> Decimal:
+def reserved_open_buy_amount(config: StrategyConfig, repository: SQLiteRepository) -> Decimal:
     with repository.transaction() as connection:
         return _reserved_open_buy_from_connection(config, connection)
 
 
-def committed_core_buy_quantity(
-    repository: SQLiteRepository, symbol: str
-) -> int:
+def committed_core_buy_quantity(repository: SQLiteRepository, symbol: str) -> int:
     with repository.transaction() as connection:
         return _committed_core_buy_quantity_from_connection(connection, symbol)
 
@@ -310,8 +289,19 @@ def reserve_buy_order_with_managed_cash(
                 raise RuntimeError("JH AUTO 최초 시작승인 전에는 실제 매수를 할 수 없습니다")
             if _system_text(connection, AUTO_QUARANTINE_KEY) != "0":
                 raise RuntimeError("JH AUTO 임시격리 상태라 실제 매수가 차단되어 있습니다")
-            if _system_text(connection, AUTO_OPERATOR_HALT_LATCH_KEY) == "1":
-                raise RuntimeError("대표 긴급정지 상태라 JH AUTO 실제 매수가 차단되어 있습니다")
+            if _system_text(connection, AUTO_OPERATOR_HALT_LATCH_KEY) != "0":
+                raise RuntimeError(
+                    "JH AUTO 대표 긴급정지 상태가 ON이거나 누락·손상되어 실제 매수가 차단되어 있습니다"
+                )
+            if _system_text(connection, AUTO_STATE_KEY) != "RUNNING":
+                raise RuntimeError("JH AUTO 실행상태가 RUNNING이 아니라 실제 매수가 차단되어 있습니다")
+            effective = _system_text(connection, AUTO_EFFECTIVE_PRINCIPAL_KEY)
+            try:
+                effective_principal = Decimal(str(effective))
+            except Exception as exc:
+                raise RuntimeError("JH AUTO 현재 허용원금 상태가 누락·손상되었습니다") from exc
+            if not effective_principal.is_finite() or effective_principal <= 0:
+                raise RuntimeError("JH AUTO 현재 허용원금이 0 이하라 실제 매수가 차단되어 있습니다")
 
         raw_cash = _raw_managed_cash_from_connection(config, connection)
         invested = _managed_cost_basis_from_connection(config, connection)
@@ -335,13 +325,11 @@ def reserve_buy_order_with_managed_cash(
                     price,
                     config.global_.buy_fee,
                 )
-            committed = _committed_core_buy_quantity_from_connection(
-                connection, symbol
-            )
+            committed = _committed_core_buy_quantity_from_connection(connection, symbol)
             remaining_target = max(0, target - int(core["qty"]) - committed)
             if quantity > remaining_target:
                 raise RuntimeError(
-                    "V3.2.2/JH AUTO 목표수량을 초과하는 코어 매수를 차단했습니다 "
+                    "V3.2.2 목표수량을 초과하는 코어 매수를 JH AUTO 경계에서 차단했습니다 "
                     f"(요청={quantity}주, 잔여={remaining_target}주, "
                     f"보유={int(core['qty'])}주, 주문중={committed}주)"
                 )
@@ -351,7 +339,7 @@ def reserve_buy_order_with_managed_cash(
         )
         if required > available:
             raise RuntimeError(
-                "JDSS HWM75/JH AUTO 위험예산이 부족하여 매수 주문을 차단했습니다 "
+                "JDSS HWM75 위험예산 또는 JH AUTO 위임한도가 부족하여 매수 주문을 차단했습니다 "
                 f"(필요={required:.2f}, 사용가능={available:.2f}, 위험예산={risk_budget:.2f})"
             )
         cursor = connection.execute(
@@ -405,9 +393,14 @@ def marked_managed_equity(
     broker: Broker,
 ) -> Decimal:
     """Full managed marked equity, including profit retained outside risk budget."""
-    return managed_cash_balance(config, repository) + managed_market_value(
-        config, repository, broker
-    )
+    # Logical AUTO cash may become temporarily negative after the operator
+    # reduces delegated principal while risk-reducing SELLs are still pending. That
+    # negative amount is a capital-withdrawal liability, not spendable cash. Keep it
+    # in marked equity so a capital reduction cannot be mistaken for investment
+    # profit, while managed_cash_balance() remains clamped for BUY availability.
+    raw_cash = raw_managed_cash_balance(config, repository)
+    market_value = managed_market_value(config, repository, broker)
+    return max(Decimal("0"), raw_cash + market_value)
 
 
 def managed_equity(

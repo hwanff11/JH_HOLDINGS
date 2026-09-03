@@ -28,6 +28,7 @@ def test_document_roles_and_change_impact_are_explicit():
         "변경 영향별 필수 동기화",
         "strategy.yaml",
         "JDSS_FINAL_SPEC.md",
+        "JH_AUTO_SPEC.md",
         "TELEGRAM_BOT_GUIDE.md",
         "DEPLOYMENT.md",
         "SECURITY.md",
@@ -36,6 +37,7 @@ def test_document_roles_and_change_impact_are_explicit():
         assert required in agents
     for required in (
         "JDSS_FINAL_SPEC.md",
+        "JH_AUTO_SPEC.md",
         "TELEGRAM_BOT_GUIDE.md",
         "DEPLOYMENT.md",
         "DEVELOPMENT_WORKFLOW.md",
@@ -51,9 +53,7 @@ def test_document_lifecycle_uses_fixed_current_files_and_git_history():
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     guide = (ROOT / "docs/README.md").read_text(encoding="utf-8")
     history = (ROOT / "docs/HISTORY.md").read_text(encoding="utf-8")
-    workflow = (ROOT / "docs/infra/DEVELOPMENT_WORKFLOW.md").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / "docs/infra/DEVELOPMENT_WORKFLOW.md").read_text(encoding="utf-8")
 
     assert "롤링 상태판" in agents
     assert "제자리 갱신" in guide
@@ -82,9 +82,7 @@ def test_document_lifecycle_uses_fixed_current_files_and_git_history():
 def test_mutable_runtime_status_has_single_source():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     docs_readme = (ROOT / "docs/README.md").read_text(encoding="utf-8")
-    workflow = (ROOT / "docs/infra/DEVELOPMENT_WORKFLOW.md").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / "docs/infra/DEVELOPMENT_WORKFLOW.md").read_text(encoding="utf-8")
 
     assert "릴리즈·배포 버전·Oracle 동기화 여부·실거래 잠금 상태" in readme
     assert "현재 브랜치·배포·다음 작업" in docs_readme

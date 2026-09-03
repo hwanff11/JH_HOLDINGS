@@ -110,14 +110,17 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         settings = self.auto_service.settings()
         snapshot = self._display_snapshot()
         equity = Decimal(str(snapshot.get("equity", 0)))
-        cash = Decimal(str(snapshot.get("cash", 0)))
-        invested = Decimal(str(snapshot.get("invested_market_value", equity - cash)))
+        raw_cash = Decimal(str(snapshot.get("cash", 0)))
+        cash = max(Decimal("0"), raw_cash)
+        pending_reduction = max(Decimal("0"), -raw_cash)
+        invested = Decimal(str(snapshot.get("invested_market_value", equity - raw_cash)))
         raw_units = self.repository.get_system_value(AUTO_UNITS_KEY) or "0"
         units = Decimal(str(raw_units))
         nav = equity / units if settings.launch_authorized and units > 0 else Decimal("1")
         return {
             "equity": equity,
             "cash": cash,
+            "pending_reduction": pending_reduction,
             "invested": invested,
             "profit": equity - settings.effective_principal if settings.launch_authorized else Decimal("0"),
             "return": nav - Decimal("1"),
@@ -158,6 +161,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"• 자동운용비율 : <code>{ratio}</code>",
                 f"• 목표 자동원금 : <code>{_money(settings.target_principal)}</code>",
                 f"• 현재 허용원금 : <code>{_money(settings.effective_principal)}</code>",
+                f"• 자금축소 회수대기 : <code>{_money(perf['pending_reduction'])}</code>",
                 f"• 자금투입 단계 : <code>{ramp}</code>",
                 "",
                 "📈 <b>현재 성과</b>",
@@ -165,6 +169,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"• 누적 운용손익 : <code>{_signed_money(perf['profit'])}</code>",
                 f"• 누적 운용수익률 : <code>{_percent(perf['return'])}</code>",
                 f"• 투자중 : <code>{_money(perf['invested'])}</code> · 현금 <code>{_money(perf['cash'])}</code>",
+                f"• 자금축소 회수대기 : <code>{_money(perf['pending_reduction'])}</code>",
                 f"• 최고 평가액 : <code>{_money(perf['high_water'])}</code>",
                 f"• HWM75 위험한도 : <code>{_money(perf['risk_budget'])}</code>",
                 "",

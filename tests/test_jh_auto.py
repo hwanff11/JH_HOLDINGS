@@ -10,6 +10,9 @@ from jd_holdings.application.broker import DryRunBroker
 from jd_holdings.application.database import SQLiteRepository
 from jd_holdings.application.managed_account import (
     current_v322_capital_state,
+    managed_cash_balance,
+    marked_managed_equity,
+    raw_managed_cash_balance,
     reserve_buy_order_with_managed_cash,
 )
 from jd_holdings.application.operational_safety import OperatorSafetyService
@@ -24,6 +27,7 @@ from jd_holdings.automation.service import (
     TARGET_QTY_GENERATION_KEY,
 )
 from jd_holdings.core.models import OrderReceipt
+from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
 
 
 class _CleanReconciliation:
@@ -324,3 +328,177 @@ def test_auto_executor_does_nothing_outside_regular_session(tmp_path, config):
 
     assert service.execute_one(trading) is None
     assert trading.executed == []
+
+
+def test_auto_final_buy_gate_fails_closed_when_halt_latch_is_missing(tmp_path, config):
+    repository, broker, service = _service(tmp_path, config)
+    service.set_base_capital("50000")
+    service.set_ratio_percent("20")
+    service.authorize_launch()
+    assert service.try_release_quarantine(safety_ready=True)
+    with repository.transaction() as connection:
+        connection.execute(
+            "DELETE FROM system_state WHERE key = ?",
+            (AUTO_OPERATOR_HALT_LATCH_KEY,),
+        )
+
+    with pytest.raises(RuntimeError, match="누락·손상"):
+        reserve_buy_order_with_managed_cash(
+            config,
+            repository,
+            broker,
+            client_order_id="AUTO-MISSING-LATCH",
+            signal_id=None,
+            cycle_id=None,
+            symbol="QQQ",
+            order_type="LIMIT",
+            price=Decimal("500"),
+            quantity=1,
+            purpose="CORE_REBALANCE_BUY",
+        )
+
+
+def test_capital_reduction_keeps_withdrawal_liability_in_marked_equity(tmp_path, config):
+    repository, broker, service = _service(tmp_path, config)
+    service.set_base_capital("50000")
+    service.set_ratio_percent("20")
+    service.authorize_launch()
+    service._apply_external_flow(
+        Decimal("10000"),
+        event_type="TEST_COMPLETE_INITIAL_RAMP",
+        note="test",
+    )
+    repository.set_system_value(AUTO_RAMP_STAGE_KEY, "0")
+    repository.set_core_target(
+        "QQQ",
+        active=True,
+        target_weight=Decimal("1"),
+        signal_trade_date=date(2026, 9, 2),
+        target_qty=20,
+    )
+    assert repository.reserve_order(
+        client_order_id="AUTO-CAPITAL-REDUCTION-BUY",
+        signal_id=None,
+        cycle_id=None,
+        symbol="QQQ",
+        side="BUY",
+        order_type="LIMIT",
+        price=Decimal("500"),
+        quantity=20,
+        purpose="CORE_REBALANCE_BUY",
+    )
+    repository.update_order(
+        "AUTO-CAPITAL-REDUCTION-BUY",
+        status="FILLED",
+        broker_order_id="DRY-AUTO-CAPITAL-REDUCTION-BUY",
+        filled_qty=20,
+        average_fill_price=Decimal("500"),
+    )
+    repository.apply_core_fill("AUTO-CAPITAL-REDUCTION-BUY")
+    # The $10 buy fee is a real strategy loss and must stay in marked equity.
+    assert marked_managed_equity(config, repository, broker) == Decimal("9990.000")
+
+    reduced = service.set_ratio_percent("10")
+
+    assert reduced.effective_principal == Decimal("5000.00")
+    assert raw_managed_cash_balance(config, repository) == Decimal("-5010.000")
+    assert managed_cash_balance(config, repository) == Decimal("0")
+    assert marked_managed_equity(config, repository, broker) == Decimal("4990.000")
+
+
+class _UnknownTradingService(_FakeTradingService):
+    def execute(self, approval_id, token, *, now=None):
+        signal_id = approval_id - 200
+        self.executed.append(signal_id)
+        return OrderReceipt(
+            client_order_id=f"AUTO-{signal_id}",
+            broker_order_id=f"BROKER-{signal_id}",
+            status="UNKNOWN",
+            quantity=1,
+            filled_quantity=0,
+            average_fill_price=None,
+        )
+
+
+def test_auto_unknown_receipt_immediately_enters_quarantine(tmp_path, config):
+    repository, _broker_obj, service = _service(tmp_path, config, clock=_Clock("regular"))
+    repository.set_system_value(AUTO_LAUNCH_AUTHORIZED_KEY, "1")
+    repository.set_system_value(AUTO_QUARANTINE_KEY, "0")
+    repository.set_system_value(AUTO_OPERATOR_HALT_LATCH_KEY, "0")
+    repository.set_system_value(AUTO_STATE_KEY, "RUNNING")
+    repository.set_system_value("operator_buy_halt", "0")
+    repository.set_system_value(TARGET_QTY_GENERATION_KEY, "2026-09-02")
+
+    result = service.execute_one(
+        _UnknownTradingService(),
+        now=datetime(2026, 9, 3, 15, 0, tzinfo=UTC),
+    )
+
+    assert result is not None and result.status == "UNKNOWN"
+    assert repository.get_system_value(AUTO_QUARANTINE_KEY) == "1"
+    assert repository.get_system_value(AUTO_STATE_KEY) == "AUTO_QUARANTINE"
+    assert repository.get_system_value("operator_buy_halt") == "1"
+    assert repository.get_system_value(AUTO_OPERATOR_HALT_LATCH_KEY) == "0"
+
+
+def test_auto_telegram_views_and_launch_confirmation_are_order_free(tmp_path, config):
+    repository, _broker_obj, service = _service(tmp_path, config)
+    service.set_base_capital("50000")
+    service.set_ratio_percent("20")
+
+    rows = []
+    for symbol, price in (("QQQ", "500"), ("TQQQ", "100"), ("SOXL", "50")):
+        rows.append(
+            {
+                "symbol": symbol,
+                "core_quantity": 0,
+                "core_market_value": Decimal("0"),
+                "price": Decimal(price),
+                "cost_basis": Decimal("0"),
+                "unrealized_profit": Decimal("0"),
+                "target_weight": Decimal("0"),
+            }
+        )
+    snapshot = {
+        "equity": Decimal("0"),
+        "cash": Decimal("0"),
+        "invested_market_value": Decimal("0"),
+        "high_water": Decimal("0"),
+        "risk_budget": Decimal("0"),
+        "rows": rows,
+    }
+    app = object.__new__(JHAutoTelegramBotApp)
+    app.auto_service = service
+    app.repository = repository
+    app.portfolio_service = SimpleNamespace(snapshot=lambda: snapshot)
+    app.market_clock = _Clock("regular")
+    app.reconciliation_service = _CleanReconciliation()
+    app._auto_pending = {}
+    app._portfolio_safe_mode = lambda: False
+
+    dashboard = app._format_auto_dashboard()
+    portfolio = app._format_portfolio_message()
+    today, markup = app._prepare_today_buy_batch()
+    control, control_markup = app._format_auto_control()
+    start_review, start_markup = app._review_change("start", "1")
+
+    assert "JDSS 3.2.2" in dashboard and "JH AUTO 1.0.0" in dashboard
+    assert "누적 운용수익률" in dashboard
+    assert "QQQ" in portfolio and "보유수익률" in portfolio
+    assert "최초 시작승인 전" in today and markup is None
+    assert "운용 기준자금" in control and control_markup.keyboard
+    assert "이 확인 버튼 자체는 주문을 보내지 않습니다" in start_review
+    assert start_markup.keyboard
+    assert repository.open_orders() == []
+
+    token = next(reversed(app._auto_pending))
+    result = app._confirm_pending(token)
+
+    assert "이 버튼에서는 0건" in result
+    assert repository.open_orders() == []
+    assert service.settings().launch_authorized
+    assert service.settings().quarantine
+
+    app.notify_portfolio_buy_batch_ready((101, 102))
+    events = repository.recent_events(limit=5)
+    assert any(event["event_type"] == "JH_AUTO_SIGNAL_READY" for event in events)

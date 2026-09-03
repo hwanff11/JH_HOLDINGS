@@ -1,5 +1,16 @@
 # JH_HOLDINGS Agent Instructions
 
+
+## JDSS 전략과 JH AUTO 실행계층
+
+- **JDSS 3.2.2**는 시장판단·목표비중·RS6M·HWM75 전략 수학을 소유합니다.
+- **JH AUTO 1.0.0**은 운용 기준자금·자동운용비율·성과회계·자동승인·자동주문·최초 시작·긴급정지를 소유합니다.
+- 전략 변경은 `strategy.yaml` + `docs/JDSS_FINAL_SPEC.md`를, 자동운용 변경은 `docs/JH_AUTO_SPEC.md`를 반드시 기준으로 확인합니다.
+- JH AUTO가 설치돼도 `launch_authorized=1`이 운영자 확인으로 기록되기 전 실제 BUY는 0건이어야 합니다.
+- 배포·재시작·정상화 작업은 최초 시작승인으로 해석하지 않습니다.
+- 운영자 `/halt`의 durable latch는 시스템이 자동해제할 수 없습니다.
+- 자동 BUY는 기존 `TradingService → OrderManager` 최종 안전경계를 우회해서 구현하지 않습니다.
+
 이 파일은 Codex, ChatGPT, 그리고 Antigravity(안티그라비티)가 이 저장소에서 작업할 때 공통으로 따라야 할 작업 규칙을 정의한다.
 
 GitHub 저장소명은 `JH_HOLDINGS`이다. Python 호환성을 위해 내부 패키지명 `jd_holdings`와 CLI `jdss` / `jdss-bot`은 유지한다. Oracle의 정확한 대상 디렉터리·서비스명·백업 식별자는 보호된 배포 설정과 비공개 운영 기록에서 관리하며 공개 Markdown에 적지 않는다. 완료된 구 runtime 식별자는 새 배포·문서·자동화에서 다시 사용하지 않는다.

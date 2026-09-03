@@ -28,6 +28,18 @@ def _config(*, portfolio_enabled: bool = True):
     return SimpleNamespace(portfolio=SimpleNamespace(enabled=portfolio_enabled))
 
 
+class _AutoServiceStub:
+    @classmethod
+    def bootstrap_repository(cls, _repository):
+        return None
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    def arm_startup_quarantine(self):
+        return None
+
+
 def test_runtime_routes_dry_run_to_default_bot(monkeypatch, tmp_path):
     called: list[str] = []
     monkeypatch.setattr(runtime, "load_runtime_settings", lambda: _settings(tmp_path, mode="dry_run"))
@@ -104,6 +116,7 @@ def test_live_bot_arms_buy_halt_before_broker_and_starts_app(monkeypatch, tmp_pa
     monkeypatch.setattr(live_bot, "load_config", lambda _path: config)
     monkeypatch.setattr(live_bot, "configure_logging", lambda _path: sequence.append("logging"))
     monkeypatch.setattr(live_bot, "SQLiteRepository", lambda *_args: repository)
+    monkeypatch.setattr(live_bot, "ProductionJHAutoService", _AutoServiceStub)
     monkeypatch.setattr(
         live_bot,
         "arm_live_startup_buy_halt",
@@ -121,7 +134,7 @@ def test_live_bot_arms_buy_halt_before_broker_and_starts_app(monkeypatch, tmp_pa
     monkeypatch.setattr(live_bot, "OrderManager", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(live_bot, "PositionManager", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(live_bot, "TakeProfitManager", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(live_bot, "LiveAllocationTradingService", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(live_bot, "JHAutoLiveAllocationTradingService", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(live_bot, "OrderMonitor", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(
         live_bot,
@@ -132,8 +145,8 @@ def test_live_bot_arms_buy_halt_before_broker_and_starts_app(monkeypatch, tmp_pa
     monkeypatch.setattr(live_bot, "AnalysisService", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(
         live_bot,
-        "HardenedOperationalSafetyTelegramBotApp",
-        lambda *_args: app,
+        "JHAutoTelegramBotApp",
+        lambda *_args, **_kwargs: app,
     )
 
     live_bot.main()
@@ -158,6 +171,7 @@ def test_live_bot_notifies_startup_reconciliation_mismatch(monkeypatch, tmp_path
     monkeypatch.setattr(live_bot, "load_config", lambda _path: config)
     monkeypatch.setattr(live_bot, "configure_logging", lambda _path: None)
     monkeypatch.setattr(live_bot, "SQLiteRepository", lambda *_args: repository)
+    monkeypatch.setattr(live_bot, "ProductionJHAutoService", _AutoServiceStub)
     monkeypatch.setattr(live_bot, "arm_live_startup_buy_halt", lambda _repo: None)
     monkeypatch.setattr(live_bot, "recover_unapplied_core_fills", lambda _repo: [])
     monkeypatch.setattr(live_bot, "YFinanceDataSource", lambda *_args: SimpleNamespace())
@@ -166,7 +180,7 @@ def test_live_bot_notifies_startup_reconciliation_mismatch(monkeypatch, tmp_path
     monkeypatch.setattr(live_bot, "OrderManager", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(live_bot, "PositionManager", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(live_bot, "TakeProfitManager", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(live_bot, "LiveAllocationTradingService", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(live_bot, "JHAutoLiveAllocationTradingService", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(live_bot, "OrderMonitor", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(
         live_bot,
@@ -181,8 +195,8 @@ def test_live_bot_notifies_startup_reconciliation_mismatch(monkeypatch, tmp_path
     monkeypatch.setattr(live_bot, "AnalysisService", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(
         live_bot,
-        "HardenedOperationalSafetyTelegramBotApp",
-        lambda *_args: app,
+        "JHAutoTelegramBotApp",
+        lambda *_args, **_kwargs: app,
     )
 
     live_bot.main()

@@ -878,6 +878,8 @@ class JHAutoService:
             return None
 
         status = str(receipt.status).upper()
+        if status == "UNKNOWN":
+            self.quarantine("AUTO_ORDER_UNKNOWN")
         if status in {"CANCELED", "REJECTED", "REPLACED"} and receipt.filled_quantity < receipt.quantity:
             self._set_retry_cooldown(signal_id, current)
         with self.repository.transaction() as connection:

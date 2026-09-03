@@ -1,4 +1,19 @@
-# Oracle 배포·검증·롤백 가이드
+#
+
+## JH AUTO 배포와 시작은 별개입니다
+
+JH AUTO 코드가 포함된 LIVE-ARMED 배포에서도 기존 배포 전 BUY halt를 먼저 ON으로 만들고 `/resume`을 자동 실행하지 않습니다. 신규 AUTO 상태는 fail-closed로 초기화되며 최초 시작승인·현재 허용원금은 운영자 동의 없이 열리지 않습니다.
+
+배포 후 추가 확인:
+
+1. JDSS 전략버전과 JH AUTO 실행버전을 각각 확인
+2. `launch_authorized=0`이면 현재 허용원금 0·신규 BUY 차단 확인
+3. 시스템 임시격리와 대표 긴급정지 latch를 구분해 표시
+4. Telegram `/auto`, `/dashboard`, `/today`, `/portfolio` 조회 확인
+5. 계좌·원장 대조와 Toss 조회전용 상태 확인
+
+**배포 완료를 이유로 `/auto start`를 대신 수행하지 않습니다.** 최초 시작은 운영자가 Telegram의 2단계 확인으로 별도 승인합니다.
+ Oracle 배포·검증·롤백 가이드
 
 이 문서는 **버전과 무관한 Oracle 배포 절차**만 소유합니다. 배포할 전략 계약은 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 저장소·운영 서버 버전과 실거래 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
 

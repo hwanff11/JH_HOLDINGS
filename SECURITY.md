@@ -1,5 +1,10 @@
 # Security Policy
 
+
+## JH AUTO 안전 진입점
+
+자동매매 실행계층의 상세 불변식은 [`docs/infra/SECURITY.md`](docs/infra/SECURITY.md)와 [`docs/JH_AUTO_SPEC.md`](docs/JH_AUTO_SPEC.md)를 따릅니다. 특히 최초 시작승인 전 BUY 0건, 운영자 `/halt` 자동해제 금지, UNKNOWN 주문 재전송 금지는 배포·편의 기능보다 우선합니다.
+
 JH_HOLDINGS의 상세 보안·주문 안전 기준은 [`docs/infra/SECURITY.md`](docs/infra/SECURITY.md)가 소유합니다. 이 파일은 GitHub에서 보안 기준을 빠르게 찾기 위한 진입점입니다.
 
 ## 핵심 원칙

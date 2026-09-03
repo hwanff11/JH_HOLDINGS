@@ -1,5 +1,13 @@
 # JH_HOLDINGS
 
+
+## 두 개의 버전을 따로 관리합니다
+
+- **투자전략 `JDSS 3.2.2`**: 무엇을 얼마나 보유할지 결정합니다.
+- **자동매매 `JH AUTO 1.0.0`**: 대표가 위임한 자금 범위에서 그 목표를 어떤 안전조건으로 실제 실행할지 관리합니다.
+
+자동매매 상세는 [`docs/JH_AUTO_SPEC.md`](docs/JH_AUTO_SPEC.md), 전략 상세는 [`docs/JDSS_FINAL_SPEC.md`](docs/JDSS_FINAL_SPEC.md)를 따릅니다. 현재 실제 배포·시작승인 상태는 오직 [`CURRENT_WORK.md`](CURRENT_WORK.md)에서 확인합니다.
+
 JH_HOLDINGS는 **QQQ를 기본 자산으로 두고 시장 상태에 따라 TQQQ·SOXL 비중을 조절하는 JDSS 반자동 운용 시스템**입니다. 전략 판단과 위험축소 매도는 시스템이 처리하고, 위험을 늘리는 매수는 Telegram에서 운영자가 검토한 뒤 최종 승인합니다.
 
 현재 릴리즈·배포 버전·Oracle 동기화 여부·실거래 잠금 상태처럼 자주 바뀌는 정보는 [`CURRENT_WORK.md`](CURRENT_WORK.md)에서만 확인합니다. 이 README는 프로젝트의 **입구와 문서 지도**만 담당합니다.
