@@ -1,0 +1,43 @@
+name: Research QQQM Execution
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_qqqm_execution.py"
+      - ".github/workflows/research-qqqm-execution.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    if: github.head_ref == 'research/qqqm-execution-20260903'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --constraint requirements.lock -e .
+      - name: Run QQQM execution simulation
+        run: |
+          set -Eeuo pipefail
+          mkdir -p reports
+          python scripts/research_qqqm_execution.py \
+            --start 2020-10-13 \
+            --end 2026-09-02 \
+            --output-json reports/qqqm-execution.json \
+            --output-md reports/qqqm-execution.md
+      - name: Publish summary
+        run: cat reports/qqqm-execution.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload research report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qqqm-execution-${{ github.run_id }}
+          path: reports/qqqm-execution.*
