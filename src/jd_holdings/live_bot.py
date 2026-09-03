@@ -33,6 +33,11 @@ from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
 from jd_holdings.settings import load_runtime_settings
 
+# Keep the historical module-level seam used by live entrypoint tests and emergency
+# monkeypatch tooling, while the concrete production implementation is the new
+# JH AUTO-aware display class.
+JHAutoTelegramBotApp = LiveJHAutoTelegramBotApp
+
 
 def _run_locked_live(settings) -> None:
     config = load_config(settings.config_path)
@@ -108,7 +113,7 @@ def _run_locked_live(settings) -> None:
         logging.getLogger(__name__).error("live 시작 정합성 검사 실패: %s", mismatches)
 
     analysis_service = AnalysisService(config, repository, data_source, market_clock)
-    app = LiveJHAutoTelegramBotApp(
+    app = JHAutoTelegramBotApp(
         config,
         settings,
         repository,
