@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
@@ -79,11 +79,7 @@ class AutoSettings:
 
     @property
     def configured(self) -> bool:
-        return (
-            self.base_capital is not None
-            and self.ratio is not None
-            and self.target_principal > 0
-        )
+        return self.base_capital is not None and self.ratio is not None and self.target_principal > 0
 
     @property
     def ratio_percent(self) -> Decimal | None:
@@ -261,9 +257,7 @@ class JHAutoService:
             effective_principal=self._decimal(AUTO_EFFECTIVE_PRINCIPAL_KEY),
             launch_authorized=self.repository.get_system_value(AUTO_LAUNCH_AUTHORIZED_KEY) == "1",
             quarantine=self.repository.get_system_value(AUTO_QUARANTINE_KEY) == "1",
-            operator_halt_latched=(
-                self.repository.get_system_value(AUTO_OPERATOR_HALT_LATCH_KEY) == "1"
-            ),
+            operator_halt_latched=(self.repository.get_system_value(AUTO_OPERATOR_HALT_LATCH_KEY) == "1"),
             state=self.repository.get_system_value(AUTO_STATE_KEY) or "SETUP",
             ramp_stage=int(self.repository.get_system_value(AUTO_RAMP_STAGE_KEY) or "0"),
             ramp_base_principal=self._decimal(AUTO_RAMP_BASE_KEY),
@@ -316,11 +310,7 @@ class JHAutoService:
         new_target = self._target_principal(new_base, new_ratio)
         if before.launch_authorized and self.repository.open_orders():
             raise RuntimeError("진행 중 주문이 있어 자금 설정을 바꿀 수 없습니다")
-        if (
-            before.launch_authorized
-            and new_target > before.target_principal
-            and before.ramp_stage != 0
-        ):
+        if before.launch_authorized and new_target > before.target_principal and before.ramp_stage != 0:
             raise RuntimeError("현재 자금확대 단계가 끝난 뒤 추가 확대할 수 있습니다")
 
         if new_base is not None:
@@ -407,8 +397,7 @@ class JHAutoService:
         ]
         if dirty:
             raise RuntimeError(
-                "최초 JH AUTO 시작은 관리종목 보유수량이 0인 청정 원장에서만 허용합니다 "
-                f"({', '.join(dirty)})"
+                f"최초 JH AUTO 시작은 관리종목 보유수량이 0인 청정 원장에서만 허용합니다 ({', '.join(dirty)})"
             )
         mismatches = self.reconciliation_service.run()
         if mismatches:
@@ -447,9 +436,7 @@ class JHAutoService:
             AUTO_RAMP_STAGE_STARTED_KEY,
             self._latest_completed_date().isoformat(),
         )
-        first = (target * RAMP_FRACTIONS[1]).quantize(
-            Decimal("0.01"), rounding=ROUND_DOWN
-        )
+        first = (target * RAMP_FRACTIONS[1]).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         self._apply_external_flow(
             first,
             event_type="LAUNCH_STAGE_1",
@@ -599,9 +586,7 @@ class JHAutoService:
             self.repository.set_system_value(AUTO_STATE_KEY, "AUTO_QUARANTINE")
             self.repository.set_system_value(AUTO_LAST_ERROR_KEY, reason)
             self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
-            self.repository.set_system_value(
-                OPERATOR_BUY_HALT_AT_KEY, datetime.now(UTC).isoformat()
-            )
+            self.repository.set_system_value(OPERATOR_BUY_HALT_AT_KEY, datetime.now(UTC).isoformat())
         self.repository.log_event(
             "SAFE_MODE",
             "JH_AUTO_QUARANTINED",
@@ -612,9 +597,7 @@ class JHAutoService:
     def try_release_quarantine(self, *, safety_ready: bool) -> bool:
         settings = self.settings()
         if not settings.launch_authorized:
-            self.repository.set_system_value(
-                AUTO_STATE_KEY, "READY" if settings.configured else "SETUP"
-            )
+            self.repository.set_system_value(AUTO_STATE_KEY, "READY" if settings.configured else "SETUP")
             return False
         if settings.operator_halt_latched:
             self.repository.set_system_value(AUTO_STATE_KEY, "OPERATOR_HALT")
@@ -729,13 +712,9 @@ class JHAutoService:
         cash = max(Decimal("0"), raw_managed_cash_balance(self.config, self.repository))
         invested = max(Decimal("0"), equity - cash)
         if record:
-            high_water, risk_budget = record_v322_equity(
-                self.config, self.repository, equity
-            )
+            high_water, risk_budget = record_v322_equity(self.config, self.repository, equity)
         else:
-            high_water, risk_budget = current_v322_capital_state(
-                self.config, self.repository
-            )
+            high_water, risk_budget = current_v322_capital_state(self.config, self.repository)
         units = self._decimal(AUTO_UNITS_KEY)
         nav = equity / units if units > 0 else Decimal("1")
         cumulative = nav - Decimal("1")
@@ -862,9 +841,7 @@ class JHAutoService:
         self.repository.set_system_value(AUTO_LAST_CYCLE_KEY, cycle_id)
 
         try:
-            review_id, review_token = trading_service.create_review_approval(
-                signal_id, now=current
-            )
+            review_id, review_token = trading_service.create_review_approval(signal_id, now=current)
             quote = trading_service.consume_review(review_id, review_token, now=current)
             if quote.execution_approval_id is None or not quote.execution_token:
                 raise RuntimeError("자동 최종승인 토큰이 생성되지 않았습니다")

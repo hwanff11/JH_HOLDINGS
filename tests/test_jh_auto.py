@@ -15,13 +15,11 @@ from jd_holdings.application.managed_account import (
 from jd_holdings.application.operational_safety import OperatorSafetyService
 from jd_holdings.automation.live_service import ProductionJHAutoService
 from jd_holdings.automation.service import (
-    AUTO_EFFECTIVE_PRINCIPAL_KEY,
     AUTO_LAUNCH_AUTHORIZED_KEY,
     AUTO_OPERATOR_HALT_LATCH_KEY,
     AUTO_QUARANTINE_KEY,
     AUTO_RAMP_STAGE_KEY,
     AUTO_STATE_KEY,
-    AUTO_TARGET_PRINCIPAL_KEY,
     AUTO_UNITS_KEY,
     TARGET_QTY_GENERATION_KEY,
 )
@@ -70,7 +68,6 @@ class _FakeTradingService:
     def execute(self, approval_id, token, *, now=None):
         signal_id = approval_id - 200
         self.executed.append(signal_id)
-        symbol = "QQQ" if signal_id == 1 else "TQQQ"
         return OrderReceipt(
             client_order_id=f"AUTO-{signal_id}",
             broker_order_id=f"BROKER-{signal_id}",
@@ -218,9 +215,7 @@ def test_risk_reduction_is_immediate_not_staged(tmp_path, config):
     assert reduced.ramp_stage == 0
 
 
-def test_unitized_return_is_not_changed_by_external_capital_flow(
-    tmp_path, config, monkeypatch
-):
+def test_unitized_return_is_not_changed_by_external_capital_flow(tmp_path, config, monkeypatch):
     repository, _broker_obj, service = _service(tmp_path, config)
     service.set_base_capital("50000")
     service.set_ratio_percent("20")
@@ -265,9 +260,7 @@ def test_unitized_return_is_not_changed_by_external_capital_flow(
     assert perf.cumulative_return == pytest.approx(Decimal("0.20"))
 
 
-def test_operator_halt_sets_durable_latch_and_resume_clears_after_reconciliation(
-    tmp_path, config
-):
+def test_operator_halt_sets_durable_latch_and_resume_clears_after_reconciliation(tmp_path, config):
     repository, broker, _service_obj = _service(tmp_path, config)
     repository.set_system_value("operator_buy_halt", "0")
     safety = OperatorSafetyService(repository, broker, _CleanReconciliation())
@@ -321,9 +314,7 @@ def test_auto_executor_handles_at_most_one_signal_per_clean_cycle(tmp_path, conf
 
 
 def test_auto_executor_does_nothing_outside_regular_session(tmp_path, config):
-    repository, _broker_obj, service = _service(
-        tmp_path, config, clock=_Clock("after_hours")
-    )
+    repository, _broker_obj, service = _service(tmp_path, config, clock=_Clock("after_hours"))
     repository.set_system_value(AUTO_LAUNCH_AUTHORIZED_KEY, "1")
     repository.set_system_value(AUTO_QUARANTINE_KEY, "0")
     repository.set_system_value(AUTO_STATE_KEY, "RUNNING")

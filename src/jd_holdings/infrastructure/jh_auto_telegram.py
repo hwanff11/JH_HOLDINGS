@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 from __future__ import annotations
 
 import html
@@ -12,8 +13,6 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from jd_holdings.automation import AUTO_VERSION
 from jd_holdings.automation.service import (
-    AUTO_LAUNCH_AUTHORIZED_KEY,
-    AUTO_OPERATOR_HALT_LATCH_KEY,
     AUTO_UNITS_KEY,
     JHAutoService,
 )
@@ -138,11 +137,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
     def _format_auto_dashboard(self) -> str:
         settings = self.auto_service.settings()
         perf = self._display_performance()
-        ratio = (
-            f"{settings.ratio_percent:.2f}%"
-            if settings.ratio_percent is not None
-            else "미설정"
-        )
+        ratio = f"{settings.ratio_percent:.2f}%" if settings.ratio_percent is not None else "미설정"
         base = _money(settings.base_capital) if settings.base_capital is not None else "미설정"
         ramp = (
             f"{settings.ramp_stage}/3"
@@ -251,7 +246,9 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             target = int(core["target_qty"])
             cost_basis = Decimal(str(core["cost_basis"] or "0"))
             market_value = Decimal(str(row.get("core_market_value", 0))) if row else Decimal("0")
-            unrealized = Decimal(str(row.get("unrealized_profit", market_value - cost_basis))) if row else Decimal("0")
+            unrealized = (
+                Decimal(str(row.get("unrealized_profit", market_value - cost_basis))) if row else Decimal("0")
+            )
             holding_return = unrealized / cost_basis if cost_basis > 0 else Decimal("0")
             diff = target - qty
             if diff > 0:
@@ -281,11 +278,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
     def _format_auto_control(self) -> tuple[str, InlineKeyboardMarkup]:
         settings = self.auto_service.settings()
         base = _money(settings.base_capital) if settings.base_capital is not None else "미설정"
-        ratio = (
-            f"{settings.ratio_percent:.2f}%"
-            if settings.ratio_percent is not None
-            else "미설정"
-        )
+        ratio = f"{settings.ratio_percent:.2f}%" if settings.ratio_percent is not None else "미설정"
         lines = [
             "🤖 <b>[JH AUTO 1.0.0]</b>",
             "",
@@ -338,9 +331,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             InlineKeyboardButton("📊 포트폴리오", callback_data="ops|portfolio"),
             InlineKeyboardButton("💰 실제 계좌", callback_data="ops|account"),
         )
-        markup.row(
-            InlineKeyboardButton("📋 진행 중 주문", callback_data="ops|orders")
-        )
+        markup.row(InlineKeyboardButton("📋 진행 중 주문", callback_data="ops|orders"))
         return markup
 
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
@@ -545,9 +536,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                     text, markup = self._review_change("start", "1")
                     self._send(text, markup=markup)
                     return
-                raise ValueError(
-                    "형식: /auto | /auto capital 50000 | /auto ratio 20 | /auto start"
-                )
+                raise ValueError("형식: /auto | /auto capital 50000 | /auto ratio 20 | /auto start")
             except Exception as exc:
                 self._send(
                     "⛔ JH AUTO 요청을 처리하지 않았습니다.\n"
