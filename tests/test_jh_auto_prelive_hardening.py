@@ -15,6 +15,7 @@ from jd_holdings.automation.prelive_hardening import HardenedProductionJHAutoSer
 from jd_holdings.automation.service import (
     AUTO_ENABLED_KEY,
     AUTO_QUARANTINE_KEY,
+    AUTO_RAMP_STAGE_KEY,
     AUTO_STATE_KEY,
     TARGET_QTY_GENERATION_KEY,
 )
@@ -66,6 +67,18 @@ def _launch(repository, service, *, capital="50000", ratio="20"):
     repository.set_system_value("operator_buy_halt", "0")
 
 
+def test_partial_operator_setup_is_allowed_but_never_authorizes_buy(tmp_path, config):
+    repository, _broker, service = _service(tmp_path, config)
+
+    after_capital = service.set_base_capital("50000")
+
+    assert after_capital.base_capital == Decimal("50000.00")
+    assert after_capital.ratio is None
+    assert not after_capital.launch_authorized
+    assert after_capital.effective_principal == 0
+    assert repository.get_system_value("operator_buy_halt") != "0"
+
+
 def test_live_guard_never_falls_back_to_reference_50k_when_auto_key_is_missing(
     tmp_path, config
 ):
@@ -104,6 +117,14 @@ def test_live_guard_rejects_effective_principal_above_operator_target(tmp_path, 
 def test_live_capital_change_is_buy_blocked_until_next_clean_safety_cycle(tmp_path, config):
     repository, _broker, service = _service(tmp_path, config)
     _launch(repository, service)
+    # Emulate a completed initial ramp so the test exercises a later operator
+    # allocation increase rather than the intentional "one ramp at a time" guard.
+    service._apply_external_flow(
+        Decimal("10000"),
+        event_type="TEST_COMPLETE_INITIAL_RAMP",
+        note="test",
+    )
+    repository.set_system_value(AUTO_RAMP_STAGE_KEY, "0")
 
     updated = service.set_ratio_percent("30")
 
