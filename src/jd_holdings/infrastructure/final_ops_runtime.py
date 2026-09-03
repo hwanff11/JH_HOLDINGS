@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from jd_holdings.application.order_monitor import OrderMonitor, TERMINAL_STATUSES
+from jd_holdings.application.order_monitor import TERMINAL_STATUSES, OrderMonitor
 from jd_holdings.automation.final_ops_hardening import AUTO_RAMP_STAGE_AUTO_FILL_KEY
 
 from .live_runtime_resilience import ResilientLiveInitialOnboardingPortfolioService
@@ -24,7 +24,9 @@ class LiveRuntimeLock:
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+", encoding="utf-8")
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        os.chmod(self.path, 0o600)
+        handle = os.fdopen(fd, "r+", encoding="utf-8")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -79,7 +81,9 @@ class FinalOpsOrderMonitor(OrderMonitor):
             return
         status = str(receipt.status).upper()
         completed_at = (
-            datetime.now(UTC).isoformat() if status in TERMINAL_STATUSES | {"UNKNOWN"} else None
+            datetime.now(UTC).isoformat()
+            if status in TERMINAL_STATUSES | {"UNKNOWN"}
+            else None
         )
         with self.repository.transaction() as connection:
             connection.execute(
