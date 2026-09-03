@@ -13,6 +13,8 @@ from .reconciliation import ReconciliationService
 
 OPERATOR_BUY_HALT_KEY = "operator_buy_halt"
 OPERATOR_BUY_HALT_AT_KEY = "operator_buy_halt_at"
+AUTO_OPERATOR_HALT_LATCH_KEY = "jh_auto_operator_halt_latched"
+AUTO_ENABLED_KEY = "jh_auto_enabled"
 BUY_EXECUTION_LOCK = threading.RLock()
 
 
@@ -35,6 +37,10 @@ class OperatorSafetyService:
     protects against detected state corruption, while this flag is a manual circuit
     breaker. A halt blocks BUY at the final OrderManager boundary but leaves SELL,
     order monitoring and reconciliation available for risk reduction and recovery.
+
+    When JH AUTO is installed, an explicit operator halt additionally sets a durable
+    latch.  Startup/system quarantine may use the same low-level BUY barrier, but only
+    the operator latch is forbidden from automatic release.
     """
 
     def __init__(
@@ -50,6 +56,9 @@ class OperatorSafetyService:
     def is_halted(self) -> bool:
         return self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
 
+    def _auto_enabled(self) -> bool:
+        return self.repository.get_system_value(AUTO_ENABLED_KEY) == "1"
+
     def _safe_mode_reasons(self) -> tuple[str, ...]:
         reasons: list[str] = []
         if self.repository.get_system_value("v322_portfolio_safe_mode") == "1":
@@ -60,15 +69,7 @@ class OperatorSafetyService:
         return tuple(reasons)
 
     def _recover_clean_reconciliation_safe_mode(self) -> tuple[str, ...]:
-        """Clear only stale reconciliation SAFE_MODE after a fresh clean proof.
-
-        V3.2.2 reconciliation intentionally sets sticky SAFE_MODE on uncertainty. A
-        later clean reconciliation is necessary but was previously unable to clear
-        that sticky state, which made /resume permanently impossible. Recovery is
-        deliberately narrow: enabled-symbol legacy position rows must be empty and
-        have no TP plan. Any non-empty/active legacy state remains fail-closed and
-        requires explicit investigation rather than an automatic reset.
-        """
+        """Clear only stale reconciliation SAFE_MODE after a fresh clean proof."""
         blocked: list[str] = []
         recoverable: list[str] = []
         for symbol in self.repository.config.enabled_symbols:
@@ -107,14 +108,7 @@ class OperatorSafetyService:
 
     @staticmethod
     def _cancel_is_confirmed(raw_order: dict[str, Any], broker_order_id: str) -> bool:
-        """Treat a cancellation as settled only when the original order says CANCELED.
-
-        Toss cancellation returns a separate operation order id. Acceptance of that
-        operation is not proof that the original order has already reached CANCELED;
-        it may still be PENDING_CANCEL, may have filled in the race, or the cancel may
-        later be rejected. Any state other than an explicitly matching CANCELED
-        original order remains uncertain until OrderMonitor/reconciliation proves it.
-        """
+        """Treat a cancellation as settled only when the original order says CANCELED."""
         returned_id = str(raw_order.get("orderId") or "")
         status = str(raw_order.get("status") or "").upper()
         return returned_id == broker_order_id and status == "CANCELED"
@@ -124,15 +118,16 @@ class OperatorSafetyService:
         canceled: list[str] = []
         uncertain: list[str] = []
 
-        # Serialize with OrderManager's final BUY submission section. If a BUY is
-        # already inside broker.place_order, halt waits for that call to settle and
-        # then attempts cancellation. Otherwise the flag is set before any new BUY
-        # can cross the broker boundary.
         with BUY_EXECUTION_LOCK:
             self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
             self.repository.set_system_value(
                 OPERATOR_BUY_HALT_AT_KEY, halted_at.isoformat()
             )
+            if self._auto_enabled():
+                # Only this explicit operator path sets the durable latch.  JH AUTO
+                # startup quarantine writes OPERATOR_BUY_HALT_KEY directly and can
+                # later self-release after proving safety.
+                self.repository.set_system_value(AUTO_OPERATOR_HALT_LATCH_KEY, "1")
 
             with self.repository.transaction() as connection:
                 cursor = connection.execute(
@@ -186,20 +181,19 @@ class OperatorSafetyService:
 
     def resume(self) -> dict[str, Any]:
         was_halted = self.is_halted()
+        manual_latch = (
+            self._auto_enabled()
+            and self.repository.get_system_value(AUTO_OPERATOR_HALT_LATCH_KEY) == "1"
+        )
         safe_before = self._safe_mode_reasons()
-        if not was_halted and not safe_before:
+        if not was_halted and not safe_before and not manual_latch:
             return {
                 "resumed": False,
                 "reason": "already_running",
                 "safe_mode_recovered": False,
             }
 
-        # SAFE_MODE may outlive the transient condition that created it. When the
-        # operator BUY halt is already open, temporarily close only the local BUY
-        # boundary while proving that the stale SAFE_MODE can be cleared. This does
-        # not submit/cancel broker orders and prevents a BUY from slipping through
-        # between SAFE_MODE recovery and the final reconciliation checks.
-        temporary_halt = not was_halted and bool(safe_before)
+        temporary_halt = not was_halted and bool(safe_before or manual_latch)
         if temporary_halt:
             with BUY_EXECUTION_LOCK:
                 self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "1")
@@ -233,9 +227,7 @@ class OperatorSafetyService:
             if str(order.get("side") or "").upper() == "BUY"
         ]
         if open_buys:
-            raise RuntimeError(
-                "미체결 BUY 주문이 남아 있어 BUY 차단을 해제할 수 없습니다"
-            )
+            raise RuntimeError("미체결 BUY 주문이 남아 있어 BUY 차단을 해제할 수 없습니다")
 
         with BUY_EXECUTION_LOCK:
             if self.repository.open_orders():
@@ -255,6 +247,8 @@ class OperatorSafetyService:
                     f"({', '.join(safe_reasons)})"
                 )
             self.repository.set_system_value(OPERATOR_BUY_HALT_KEY, "0")
+            if self._auto_enabled():
+                self.repository.set_system_value(AUTO_OPERATOR_HALT_LATCH_KEY, "0")
 
         safe_mode_recovered = bool(safe_before) and not self._safe_mode_reasons()
         reason = (
@@ -268,12 +262,13 @@ class OperatorSafetyService:
             "정합성 확인 후 운영자 BUY 차단을 해제했습니다",
             context={
                 "was_halted": was_halted,
+                "manual_latch": manual_latch,
                 "safe_mode_recovered": safe_mode_recovered,
                 "temporary_halt": temporary_halt,
             },
         )
         return {
-            "resumed": was_halted,
+            "resumed": was_halted or manual_latch,
             "reason": reason,
             "safe_mode_recovered": safe_mode_recovered,
         }
