@@ -8,7 +8,8 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- 현재 `main` 및 Oracle 배포본: **`a09c6bad2f95a002cc86ff3692a851a35c0d2adf`**
+- Oracle 실거래 runtime 배포본: **`a09c6bad2f95a002cc86ff3692a851a35c0d2adf`**
+- 최신 `main`에는 위 runtime과 동일한 코드에 현재상태 문서 정리만 추가될 수 있으며, 문서-only 변경은 Oracle에 재배포하지 않습니다.
 - Oracle 서비스: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - 실거래 준비 완료 표시(`live_commissioned`): **ON**
@@ -38,7 +39,7 @@ PR #312에서 JDSS 3.2.2 투자전략 수학은 유지하고 다음 실행 책�
 
 ## 3. 2026-09-03 실거래 안전배포 검증
 
-소유자 전용 LIVE-ARMED 배포로 최신 `main`을 Oracle에 반영했습니다.
+소유자 전용 LIVE-ARMED 배포로 runtime 변경을 포함한 최신 검증본을 Oracle에 반영했습니다.
 
 검증 결과:
 
