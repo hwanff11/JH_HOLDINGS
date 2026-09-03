@@ -303,14 +303,15 @@ def test_capital_reduction_keeps_withdrawal_liability_in_marked_equity(tmp_path,
         average_fill_price=Decimal("500"),
     )
     repository.apply_core_fill("AUTO-CAPITAL-REDUCTION-BUY")
-    assert marked_managed_equity(config, repository, broker) == Decimal("10000")
+    # The $10 buy fee is a real strategy loss and must stay in marked equity.
+    assert marked_managed_equity(config, repository, broker) == Decimal("9990.000")
 
     reduced = service.set_ratio_percent("10")
 
     assert reduced.effective_principal == Decimal("5000.00")
-    assert raw_managed_cash_balance(config, repository) == Decimal("-5000.000")
+    assert raw_managed_cash_balance(config, repository) == Decimal("-5010.000")
     assert managed_cash_balance(config, repository) == Decimal("0")
-    assert marked_managed_equity(config, repository, broker) == Decimal("5000.000")
+    assert marked_managed_equity(config, repository, broker) == Decimal("4990.000")
 
 
 class _UnknownTradingService(_FakeTradingService):
