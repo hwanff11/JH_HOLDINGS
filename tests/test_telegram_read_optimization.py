@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 from jd_holdings.infrastructure import final_ops_runtime
 from jd_holdings.infrastructure.final_ops_runtime import (
-    FinalOpsLiveInitialOnboardingPortfolioService,
     TELEGRAM_DISPLAY_SNAPSHOT_TTL_SECONDS,
+    FinalOpsLiveInitialOnboardingPortfolioService,
 )
 
 
