@@ -1,4 +1,7 @@
-# JDSS 쉬운 전략·거래 가이드 — 현재 운용판
+#
+
+> **전략/실행 분리:** 아래 시장판단과 목표비중은 `JDSS 3.2.2`입니다. JH AUTO 1.0.0이 활성화된 실거래에서는 기존 ‘주문 묶음 검토·최종 승인’의 사람 클릭을 자동 안전정책이 대신하되, 동일한 `TradingService → OrderManager` 검증경계를 그대로 통과합니다. 자동운용 상세는 [`JH_AUTO_SPEC.md`](JH_AUTO_SPEC.md)를 봅니다.
+ JDSS 쉬운 전략·거래 가이드 — 현재 운용판
 
 이 문서는 **JDSS V3.2.2를 이해하기 위한 상세 설명서**입니다. 빠른 요약은 [`ONE_PAGE_REPORT.md`](ONE_PAGE_REPORT.md), 숫자·예외조건의 최종 계약은 [`JDSS_FINAL_SPEC.md`](JDSS_FINAL_SPEC.md)와 [`../strategy.yaml`](../strategy.yaml)을 따릅니다.
 
