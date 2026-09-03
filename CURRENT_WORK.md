@@ -8,13 +8,13 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- Oracle 실거래 runtime 배포본: **`03a54e35268afa2097c7e03a1d1e88470f23946b`**
+- Oracle 실거래 runtime 배포본: **`9530399da0e91f3c8d8dfd330e691436dab9ac14`**
 - 최신 `main`에는 위 runtime과 동일한 코드에 현재상태 문서 정리만 추가될 수 있으며, 문서-only 변경은 Oracle에 재배포하지 않습니다.
 - Oracle 서비스: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - 실거래 준비 완료 표시(`live_commissioned`): **ON**
 - 신규 BUY 잠금: **ON (`operator_buy_halt=1`)**
-- JH AUTO 최초 시작승인: **이번 배포에서 수행하지 않음**
+- JH AUTO 최초 시작승인: **수행하지 않음**
 - 자동운용 실제 BUY: **배포 작업으로 시작하지 않음**
 - `portfolio.live_enabled`: **false** — 일반 경로 오작동 방지 잠금 유지
 - SGOV 자동운용: **OFF**
@@ -37,32 +37,40 @@ PR #312에서 JDSS 3.2.2 투자전략 수학은 유지하고 다음 실행 책�
 
 자동 BUY는 기존 `TradingService → OrderManager` 최종 주문 안전경계를 우회하지 않습니다.
 
-## 3. 2026-09-03 실거래 안전강화·재배포
+## 3. 2026-09-03 실거래 안전강화·최종 운영리스크 보완
 
 PR #316에서 실거래 전 안전강화를 반영했고, 첫 배포에서 **Telegram 메뉴 검증 스크립트가 과거 `/onboarding` 메뉴를 하드코딩한 문제**가 발견되어 배포가 fail-closed로 중단·자동복구되었습니다. 실제 JH AUTO 운영자 메뉴는 `/auto`를 사용하므로 PR #318에서 배포 smoke check가 JH AUTO 코드의 `_auto_bot_commands()`를 단일 기준으로 사용하도록 수정하고 회귀테스트를 추가했습니다.
 
-최종 Oracle LIVE-ARMED 재배포는 GitHub Issue #319 / Actions run `33725069666`에서 성공했으며 runtime은 `03a54e35268afa2097c7e03a1d1e88470f23946b`입니다.
+이후 실제 무인운영 직전 운영리스크를 다시 검토해 PR #321에서 다음을 추가 강화했습니다.
 
-검증 결과:
+- 동일 live SQLite 원장에 두 runtime이 동시에 붙지 못하도록 OS 파일잠금 적용
+- JH AUTO allocation 실행을 미국 정규장으로 제한
+- 자동 BUY 주문과 JH AUTO cycle ID를 실제 주문 원장까지 연결
+- 주문 제출 뒤 늦게 발생한 체결도 OrderMonitor가 AUTO cycle과 자금단계에 반영
+- 50→75→100 각 자금개방 단계마다 실제 AUTO 체결 증거 요구
+- 코어 BUY가 체결대기 한도를 넘으면 취소 후 상태를 확정하고, 취소상태가 불명확하면 SAFE_MODE
+- 자동매수 시도 상한을 미국 거래일 기준으로 적용
+- 위 최종 운영리스크 회귀테스트를 LIVE 배포 안전 gate에 포함
 
-- PR #318 Quality Gate **통과**
-- PR #318 Security **통과**
-- PR #318 JDSS V3 Backtest **통과**
-- `main` 병합 후 Quality Gate **통과**
-- `main` 병합 후 Security **통과**
+PR #321 head `17b4b636c2f2da181ccf832056c42640a91a627a`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `9530399da0e91f3c8d8dfd330e691436dab9ac14`입니다. 병합 후 `main` Quality Gate run `33729589879`와 Security run `33729589880`도 모두 통과했습니다.
+
+최종 Oracle LIVE-ARMED 배포는 GitHub Issue #322 / Actions run `33729865148`에서 성공했으며 runtime은 `9530399da0e91f3c8d8dfd330e691436dab9ac14`입니다.
+
+최종 배포 검증 결과:
+
 - LIVE 배포 직전 JH AUTO/실거래 회귀테스트 **통과**
 - 배포 전 신규 BUY 잠금 **확인**
 - 기존 실거래 원장·계좌 연결 **보존**
 - 계좌 대조·읽기 전용 점검 **통과**
 - Telegram 운영자 메뉴 8개 실제 등록 확인 **통과**
-- 배포 후 `BUY_HALT=1` **유지**
+- 배포 후 신규 BUY 잠금 **유지**
 - `/resume` 자동 실행하지 않음
 - `/auto start` 및 JH AUTO 최초 시작승인을 배포 작업으로 대신하지 않음
 - 자동운용 기준자금·비율을 배포 작업에서 임의 변경하지 않음
 
 ## 4. 현재 BUY 안전계약
 
-현재는 **배포 완료 상태이지 자동운용 시작 상태가 아닙니다.** 배포는 실제 BUY 권한을 열지 않습니다.
+현재는 **실운영 코드 배포 완료 상태이지 자동운용 시작 상태가 아닙니다.** 배포는 실제 BUY 권한을 열지 않습니다.
 
 자동매수를 시작하려면 다음 조건을 모두 통과해야 합니다.
 
@@ -89,7 +97,7 @@ JH AUTO는 한 안전주기에서 신규 BUY를 최대 1건만 실행합니다. 
 
 ## 6. 바로 다음 작업
 
-현재 코드·배포·실거래 안전검증은 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
+코드·문서·실운영 배포·실거래 안전검증까지 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
 
 Telegram에서 다음 순서로 진행합니다.
 
