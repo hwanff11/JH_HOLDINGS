@@ -15,13 +15,7 @@ from .prelive_hardening import (
     MAX_AUTO_SIGNAL_ATTEMPTS_PER_DAY,
     HardenedProductionJHAutoService,
 )
-from .service import (
-    AUTO_LAST_CYCLE_KEY,
-    TARGET_QTY_GENERATION_KEY,
-    V322_HWM_KEY,
-    V322_RISK_BUDGET_KEY,
-    AutoExecutionResult,
-)
+from .service import AUTO_LAST_CYCLE_KEY, TARGET_QTY_GENERATION_KEY, AutoExecutionResult
 
 AUTO_RAMP_STAGE_AUTO_FILL_KEY = "jh_auto_ramp_stage_auto_fill_seen"
 NEW_YORK_TZ = ZoneInfo("America/New_York")
@@ -38,29 +32,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
             repository.set_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY, "0")
 
     def authorize_launch(self):
-        before = self.settings()
-        if before.launch_authorized:
-            return before
-
-        # A commissioned V3.2.2 ledger may still contain the historical $50k
-        # research HWM/risk state even though JH AUTO has never traded. Prove launch
-        # eligibility first, then discard only those legacy capital-state values so
-        # stage-1 HWM starts from the operator-authorized effective principal.
-        self._preflight_launch()
-        old_hwm = self.repository.get_system_value(V322_HWM_KEY)
-        old_risk = self.repository.get_system_value(V322_RISK_BUDGET_KEY)
-        self.repository.set_system_value(V322_HWM_KEY, "0")
-        self.repository.set_system_value(V322_RISK_BUDGET_KEY, "0")
-        try:
-            updated = super().authorize_launch()
-        except Exception:
-            # A missing legacy key and an explicit zero are equivalent before AUTO
-            # launch. Avoid relying on a delete API that the repository intentionally
-            # does not expose.
-            self.repository.set_system_value(V322_HWM_KEY, old_hwm or "0")
-            self.repository.set_system_value(V322_RISK_BUDGET_KEY, old_risk or "0")
-            raise
-
+        updated = super().authorize_launch()
         if updated.ramp_stage > 0:
             self.repository.set_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY, "0")
         return self.settings()
