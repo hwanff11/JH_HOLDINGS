@@ -399,7 +399,10 @@ def test_read_401_refreshes_token_and_replays_only_read_request():
         (None, "시각이 없습니다"),
         ("not-a-date", "시각 형식"),
         ((datetime.now(UTC) - timedelta(minutes=6)).isoformat(), "오래되어"),
-        ((datetime.now(UTC) + timedelta(minutes=3)).isoformat(), "미래"),
+        # The timestamp is built at test collection time. Keep it well outside the
+        # production 120-second future-skew tolerance even when the full suite takes
+        # over a minute before this parametrized case runs.
+        ((datetime.now(UTC) + timedelta(minutes=10)).isoformat(), "미래"),
     ],
 )
 def test_current_price_rejects_missing_stale_or_future_timestamp(timestamp, message):

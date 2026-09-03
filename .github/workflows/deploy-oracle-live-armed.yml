@@ -22,11 +22,13 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issues' &&
       github.actor == github.repository_owner &&
-      startsWith(github.event.issue.title, '[deploy-oracle-live-armed]'))
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+      startsWith(github.event.issue.title, '[deploy-oracle-live-armed]')))
     runs-on: ubuntu-latest
+    # Existing protected environment is retained until live-only credentials are
+    # separately provisioned. Owner-only gating above prevents manual-dispatch widening.
     environment: oracle-dry-run
     steps:
       - name: Checkout exact latest main
@@ -56,6 +58,9 @@ jobs:
           pip install --constraint requirements.lock -e '.[dev]'
           python -m ruff check .
           python -m pytest \
+            tests/test_jh_auto.py \
+            tests/test_jh_auto_prelive_hardening.py \
+            tests/test_live_entrypoints.py \
             tests/test_live_runtime_update_contract.py \
             tests/test_live_deployment_contract.py \
             tests/test_live_runtime_safety.py \
