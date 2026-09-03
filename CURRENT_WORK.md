@@ -8,8 +8,7 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- Oracle 실거래 runtime 배포본: **`9530399da0e91f3c8d8dfd330e691436dab9ac14`**
-- 최신 `main`에는 위 runtime과 동일한 코드에 현재상태 문서 정리만 추가될 수 있으며, 문서-only 변경은 Oracle에 재배포하지 않습니다.
+- Oracle 실거래 runtime 배포본: **`e0d23d25e0e7b76781f7c0a65fbb8a7275ddb635`**
 - Oracle 서비스: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - 실거래 준비 완료 표시(`live_commissioned`): **ON**
@@ -22,6 +21,8 @@
 - 주문: **정수주만 허용**
 - 위험축소 SELL: **자동**, 불확실 상태에서는 안전정지와 계좌·원장 대조 우선
 - UNKNOWN 주문: **자동 재전송 금지**
+
+현재 runtime은 PR #324 병합본과 일치합니다. 이후 문서-only 상태판 변경은 Oracle runtime 재배포 대상이 아닙니다.
 
 ## 2. JH AUTO 1.0.0 반영 완료
 
@@ -52,13 +53,28 @@ PR #316에서 실거래 전 안전강화를 반영했고, 첫 배포에서 **Tel
 - 자동매수 시도 상한을 미국 거래일 기준으로 적용
 - 위 최종 운영리스크 회귀테스트를 LIVE 배포 안전 gate에 포함
 
-PR #321 head `17b4b636c2f2da181ccf832056c42640a91a627a`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `9530399da0e91f3c8d8dfd330e691436dab9ac14`입니다. 병합 후 `main` Quality Gate run `33729589879`와 Security run `33729589880`도 모두 통과했습니다.
+### PR #324 — 실운영 표시·문서 최종 정합성
 
-최종 Oracle LIVE-ARMED 배포는 GitHub Issue #322 / Actions run `33729865148`에서 성공했으며 runtime은 `9530399da0e91f3c8d8dfd330e691436dab9ac14`입니다.
+실운영 직전 Telegram과 운영문서를 다시 대조해 다음을 정리했습니다.
+
+- JDSS의 `$50,000`을 **연구·백테스트 비교 기준**과 **실거래 운용자금**으로 명확히 분리
+- 최초 `/auto start` 전에는 legacy HWM 값을 실거래 위험한도처럼 표시하지 않고 `시작 전`으로 표시
+- 시작 후 `HWM75 위험한도` 표현을 **`HWM75 현재 위험예산`**으로 통일
+- 아침 브리핑의 legacy 자금/HWM 표시를 실제 JH AUTO 자금상태 기준으로 정규화
+- 정상 JH AUTO에서는 개별 BUY마다 사람이 승인하지 않는다는 자동실행 계약으로 Telegram 문구 정리
+- `/today`를 수동 승인화면이 아닌 자동운용 관찰화면으로 통일
+- 시스템 임시격리와 대표 `/halt` 지속정지를 문서상 명확히 분리
+- LIVE entrypoint에서 전용 JH AUTO 표시 보호계층 사용
+
+PR #324 head `7054b3b8c4a1b0b1ab525d34e3a99b5719f6d28a`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `e0d23d25e0e7b76781f7c0a65fbb8a7275ddb635`입니다. 병합 후 main Quality Gate와 Security도 통과했습니다.
+
+Oracle LIVE-ARMED 배포는 GitHub Issue #325 / Actions run `33739907082`에서 성공했습니다.
 
 최종 배포 검증 결과:
 
+- 정확한 최신 `main` SHA **확인**
 - LIVE 배포 직전 JH AUTO/실거래 회귀테스트 **통과**
+- pinned SSH trust **통과**
 - 배포 전 신규 BUY 잠금 **확인**
 - 기존 실거래 원장·계좌 연결 **보존**
 - 계좌 대조·읽기 전용 점검 **통과**
@@ -92,8 +108,9 @@ JH AUTO는 한 안전주기에서 신규 BUY를 최대 1건만 실행합니다. 
 - `/halt`는 신규 BUY를 즉시 막는 **지속되는 대표 긴급정지**입니다.
 - 계좌가 정상으로 다시 보여도 시스템이 `/halt`를 자동으로 해제하지 않습니다.
 - `/resume`은 기존 2단계 확인과 계좌·원장 재대조를 통과해야 합니다.
-- 서버 재시작·배포는 대표 긴급정지와 별개의 **임시격리**로 시작합니다.
-- 자동운용이 시작된 이후에도 재시작 직후에는 안전조건을 다시 증명한 뒤에만 자동운전으로 복귀합니다.
+- 서버 재시작·배포는 대표 긴급정지와 별개의 **시스템 임시격리**로 시작합니다.
+- 이미 최초 시작승인이 있는 정상 runtime은 재시작 후 계좌·원장·주문상태가 모두 정상임을 다시 증명한 뒤 시스템 임시격리만 자동해제할 수 있습니다.
+- 대표 `/halt`는 어떤 자동복구 경로에서도 자동해제하지 않습니다.
 
 ## 6. 바로 다음 작업
 
