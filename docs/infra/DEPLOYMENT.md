@@ -1,285 +1,333 @@
-#
+# Oracle 배포·검증·롤백 가이드
 
-## JH AUTO 배포와 시작은 별개입니다
+이 문서는 **Oracle 배포 절차와 배포 후 안전검증**을 소유합니다.
 
-JH AUTO 코드가 포함된 LIVE-ARMED 배포에서도 기존 배포 전 BUY halt를 먼저 ON으로 만들고 `/resume`을 자동 실행하지 않습니다. 신규 AUTO 상태는 fail-closed로 초기화되며 최초 시작승인·현재 허용원금은 운영자 동의 없이 열리지 않습니다.
+- 투자전략 계약: [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)
+- 자동매매 계약: [`../JH_AUTO_SPEC.md`](../JH_AUTO_SPEC.md)
+- 보안·주문 안전경계: [`SECURITY.md`](SECURITY.md)
+- 현재 실제 배포 상태: [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)
 
-배포 후 추가 확인:
+핵심 원칙은 하나입니다.
 
-1. JDSS 전략버전과 JH AUTO 실행버전을 각각 확인
-2. `launch_authorized=0`이면 현재 허용원금 0·신규 BUY 차단 확인
-3. 시스템 임시격리와 대표 긴급정지 latch를 구분해 표시
-4. Telegram `/auto`, `/dashboard`, `/today`, `/portfolio` 조회 확인
-5. 계좌·원장 대조와 Toss 조회전용 상태 확인
+> **배포는 코드를 바꾸는 행위이고, `/auto start`는 대표가 자동 위험증가 권한을 여는 별도 행위입니다.**
 
-**배포 완료를 이유로 `/auto start`를 대신 수행하지 않습니다.** 최초 시작은 운영자가 Telegram의 2단계 확인으로 별도 승인합니다.
- Oracle 배포·검증·롤백 가이드
+배포 workflow는 `/auto start`를 대신하지 않으며 `/resume`도 자동 실행하지 않습니다.
 
-이 문서는 **버전과 무관한 Oracle 배포 절차**만 소유합니다. 배포할 전략 계약은 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 저장소·운영 서버 버전과 실거래 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
+---
 
-핵심은 **검증된 최신 버전만 배포하고, 실패하면 코드와 DB를 함께 이전 정상상태로 복구하며, 배포를 실거래 승인으로 해석하지 않는 것**입니다.
+## 1. 운영 모드별 배포 경로
 
-완료된 일회성 migration, 오래된 SHA, Actions run ID는 이 절차 문서에 누적하지 않습니다.
+### 모의운용
 
-## 1. 기본 원칙
+모의운용 Oracle은 표준 `deploy.sh` 또는 owner-only dry-run ChatOps 경로를 사용합니다.
 
-1. Oracle에는 검증된 **최신 `main`**만 배포합니다.
-2. 모의운용 배포, 최초 실거래 전환, 기존 실거래 운영 프로그램 갱신은 서로 다른 승인입니다.
-3. 현재 계약이 forced dry-run이면 배포가 이를 완화할 수 없습니다.
-4. 새 release를 먼저 준비·검증한 뒤 service downtime을 최소화합니다.
-5. service stop 이후 실패하면 코드와 DB를 함께 이전 정상상태로 rollback할 수 있어야 합니다.
-6. 문서-only commit처럼 runtime 영향이 없는 변경은 Oracle에 재배포하지 않습니다.
+### 이미 실계좌가 연결된 LIVE-ARMED / JH AUTO
 
-## 2. 서버 구조의 논리적 모델
+실계좌와 별도 실거래 원장이 이미 준비된 Oracle은 표준 dry-run 배포를 사용하지 않습니다.
 
-실제 서버 절대경로·OS 사용자명·서비스 실명은 보호된 배포 설정에서 관리하고 공개 Markdown에 기록하지 않습니다.
+반드시:
 
-논리적 구조:
+- `deploy_live_armed.sh`
+- owner-only **Deploy Oracle Live Armed** workflow
+
+경로만 사용합니다.
+
+이 경로는 기존 실계좌 연결과 live DB를 보존하고, service 교체 전에 신규 BUY 저수준 잠금을 먼저 겁니다.
+
+---
+
+## 2. JH AUTO의 배포·시작·재시작 상태를 구분합니다
+
+### 최초 JH AUTO 배포 전
 
 ```text
-current                 → 현재 활성 release 심볼릭 링크
-releases/<commit-sha>   → commit별 release
-  .venv                 → release-local Python 환경
-shared/
-  data                   → SQLite·cache
-  backups                → 배포 직전 DB snapshot
-  logs                   → 운영 로그
-  .env                   → secret·runtime environment
+실계좌 연결         가능
+JH AUTO 코드        미배포/구버전
+대표 최초 시작승인 미승인
+신규 BUY            잠금
 ```
 
-환경파일은 최소권한을 유지하고 systemd hardening과 `UMask=0077`을 유지합니다.
+### 최초 JH AUTO 배포 직후
 
-forced dry-run 계약에서는 최소한 다음을 확인합니다.
-
-```dotenv
-JDSS_TRADING_MODE=dry_run
-JDSS_LIVE_CONFIRMATION=
+```text
+JH AUTO 코드        배포 완료
+대표 최초 시작승인 미승인
+현재 허용원금       $0
+시스템 임시격리     ON
+신규 BUY            차단
 ```
 
-그리고 `strategy.yaml`의 `portfolio.live_enabled=false`를 별도로 확인합니다.
+이 상태에서 코드·Telegram·계좌조회가 모두 정상이어도 실제 BUY는 발생하면 안 됩니다.
 
-## 3. SSH host trust
+### 이미 `/auto start`가 완료된 이후의 정상 재배포/재시작
 
-- `StrictHostKeyChecking=yes` 필수
-- Oracle console 또는 기존 신뢰 관리자 PC 등 별도 경로로 host public key 확인
-- 확인된 known_hosts 값을 승인된 GitHub Environment secret에 보관
-- 새 runner가 `ssh-keyscan` 결과를 즉석 신뢰하지 않음
-- `accept-new` 사용 금지
-- host key가 바뀌었으면 원인 확인 전 배포 금지
+서비스가 다시 시작되면 먼저:
 
-## 4. 배포 전 게이트
-
-배포 전에 다음을 확인합니다.
-
-1. 원격 최신 `main`과 checkout SHA 일치
-2. 병합된 변경의 필수 CI 성공
-3. `jdss validate-config`
-4. 필요한 Ruff / pytest / deployment contract test
-5. strategy ID, config/package version 일치
-6. HWM·onboarding·SGOV·live 잠금 등 핵심 설정 불변식
-7. Environment secret·환경파일·DB·로그 권한
-8. pinned SSH host trust
-9. config version 변경 여부
-
-**config version이 바뀌면 표준 deploy를 중단**하고 별도 migration plan·DB 호환성·rollback test가 필요합니다.
-
-## 5. 배포 경로
-
-### 모의운용 배포
-
-로컬 관리 환경에서는 저장소의 `deploy.sh`를 사용합니다.
-
-```bash
-env -u GITHUB_TOKEN ./deploy.sh
+```text
+저수준 BUY halt ON
+→ JH AUTO startup quarantine ON
+→ 주문 복구
+→ 계좌·원장 재대조
+→ SAFE_MODE·열린 주문·대표 halt latch 확인
 ```
 
-GitHub 연결 환경에서는 owner-only **Deploy Oracle Dry Run** ChatOps를 사용합니다. 저장소 소유자가 제목을 `[deploy-oracle-dry-run]`으로 시작하는 Issue를 열면 workflow가 실행 시점의 최신 `main`을 checkout해 같은 `deploy.sh` 경로로 배포합니다.
+순서로 **항상 fail-closed**로 시작합니다.
 
-임의 branch·임의 SHA를 입력받아 production runtime에 배포하지 않습니다.
+다만 이것은 대표가 건 `/halt`와 다른 **시스템 임시격리**입니다.
 
-### 기존 실거래 운영 프로그램 갱신
+이미 최초 시작승인이 저장돼 있고 다음이 모두 증명되면 JH AUTO가 후속 독립 안전주기에서 자동으로 임시격리를 해제할 수 있습니다.
 
-이미 실계좌 연결·매수 잠금 상태로 전환된 Oracle은 표준 `deploy.sh`를 사용하지 않습니다. 표준 배포는 의도적으로 모의운용을 강제하므로 현재 실계좌 연결을 해제하기 때문입니다.
+- `launch_authorized=1`
+- 대표 `/halt` latch OFF
+- SAFE_MODE 없음
+- 미체결 주문 없음
+- 계좌·원장 대조 정상
+- 필요한 runtime 상태 정상
 
-기존 실거래 원장을 유지한 코드 갱신은 `deploy_live_armed.sh`와 소유자 전용 **Deploy Oracle Live Armed** 절차만 사용합니다. GitHub에서는 저장소 소유자가 제목을 `[deploy-oracle-live-armed]`로 시작하는 Issue를 열어 최신 `main`을 배포합니다.
+따라서 “모든 재시작 뒤 대표가 반드시 `/resume`해야 한다”는 계약이 아닙니다.
 
-이 경로는 다음 조건을 모두 만족하지 않으면 중단합니다.
+반대로 대표가 직접 `/halt`한 상태는 시스템이 절대 자동해제하지 않습니다.
 
-- 기존 운영 모드가 실거래이고 정확한 실거래 확인값이 설정됨
-- 기존 별도 실거래 원장과 준비 완료 표시가 존재함
-- 신규 매수 잠금이 이미 설정됨
-- 실제 계좌·원장 대조 정상
-- 로컬·토스 미체결 주문과 활성 승인이 없음
-- 기존 버전과 새 버전의 `strategy.yaml`이 같음. 단, 2026-09-01 실거래 준비에서 명시 승인된 `regular: false → true`만 장전·정규장·장후 지정가 주문 계약으로 한 번 허용
-- DB 스키마 코드 변경이 없음
+---
 
-배포 후에도 실계좌 연결은 유지하지만 신규 매수 잠금은 자동으로 다시 설정합니다. `/resume`은 별도의 운영자 판단이며 배포 과정에서 실행하지 않습니다.
+## 3. `$50,000`은 배포 한도가 아닙니다
 
-## 6. rollback-safe 배포 순서
+JDSS 3.2.2의 `$50,000`은 공식 연구·백테스트 비교 기준입니다.
+
+LIVE에서는:
+
+```text
+운용 기준자금 × 자동운용비율 = 목표 자동원금
+```
+
+이며 두 값은 Telegram `/auto`에서 대표가 정합니다.
+
+배포 workflow가 `$50,000`을 실제 운용 기준자금으로 자동 입력하거나 HWM75 실거래 한도로 강제하면 안 됩니다.
+
+최초 시작승인 전에는 HWM75 현재 위험예산도 실거래 값으로 표시하지 않습니다.
+
+---
+
+## 4. 배포 전 필수 게이트
+
+하나라도 실패하면 배포하지 않습니다.
+
+### Source / CI
+
+- 원격 최신 `main` SHA 확인
+- Quality Gate PASS
+- Security PASS
+- 전략·백테스트 영향이 있으면 canonical JDSS V3 Backtest PASS
+- `jdss validate-config` PASS
+- 주문·DB·AUTO 변경이면 관련 집중테스트 PASS
+
+### LIVE runtime
+
+- 실거래 확인값 정상
+- live DB 존재·무결성 정상
+- 계좌·원장 대조 정상
+- 미체결/UNKNOWN 상태 확인
+- operator BUY halt를 배포 전에 ON으로 만들 수 있음
+- representative `/halt` latch 상태 보존
+- DB schema/config migration 필요 여부 확인
+
+### 인프라
+
+- 검증된 SSH host key 고정
+- Environment secret 존재
+- systemd/runtime 파일 권한 정상
+- 서버 clock/disk/SQLite 상태 정상
+
+config version이나 schema가 바뀌면 일반 live update로 처리하지 않고 별도 migration 계획·호환성·rollback 테스트를 먼저 수행합니다.
+
+---
+
+## 5. SSH 신뢰경계
+
+- `StrictHostKeyChecking=yes`
+- 검증된 host public key만 `known_hosts`로 사용
+- Actions 실행 중 `ssh-keyscan` 결과를 즉석 신뢰하지 않음
+- `accept-new` 금지
+- host key가 바뀌면 원인 확인 전 배포 중단
+
+실제 서버 절대경로·OS 사용자명·서비스 실명·secret 값은 공개 Markdown에 기록하지 않습니다.
+
+---
+
+## 6. LIVE-ARMED 배포 순서
+
+논리적 순서는 다음과 같습니다.
 
 ```text
 최신 main 확인
-  → release directory 준비
-  → release-local .venv 설치
-  → requirements.lock 전이 의존성 제약 적용
-  → config·focused deployment gate 검증
-  → 기존 service/current/unit 상태 기록
-  → service 정지
-  → SQLite backup() snapshot
-  → 새 unit/current atomic switch
-  → init-db / validate-config
-  → service 시작
-  → forced dry-run / service / Toss read-only smoke
-  → 성공 시 완료
+→ 필수 CI/설정 검증
+→ 배포 전 operator BUY halt ON
+→ 기존 주문·원장·서비스 상태 기록
+→ 새 release 준비
+→ service 정지
+→ 안전한 SQLite snapshot
+→ 새 release/current 전환
+→ DB/schema/config 검증
+→ service 시작
+→ JH AUTO startup quarantine
+→ 주문 복구
+→ 계좌·원장 대조
+→ service/Telegram/read-only smoke
+→ 상태 확인
 ```
 
-service stop 이후 실패하면 자동 rollback:
+배포 과정에서는:
 
-1. 새 service 정지
-2. 이전 `current` 복원
-3. 이전 systemd unit 복원
-4. 배포 직전 DB snapshot 복원
-5. daemon reload
-6. 이전 service 재시작
-7. service active와 config/reconciliation 재확인
+- `/auto start` 실행 금지
+- `/resume` 실행 금지
+- 임의 BUY 주문 금지
+- 기존 operator `/halt` latch 삭제 금지
+- UNKNOWN 주문을 성공/실패로 추정 금지
 
-rollback까지 실패하면 정상으로 추정하지 않고 **신규 BUY 금지 + 수동 복구** 대상으로 취급합니다.
+입니다.
 
-실거래 운영 프로그램 갱신은 실패 시점에 따라 DB 복구 원칙이 다릅니다.
+---
 
-- 새 서비스를 시작하기 전 실패: 외부 주문 부작용이 없으므로 코드·서비스 설정·DB를 배포 직전으로 복구
-- 새 서비스를 시작한 뒤 실패: 자동 위험축소 매도가 발생했을 가능성이 있으므로 DB를 과거 snapshot으로 되돌리지 않고 실제 상태를 보존한 채 이전 코드만 복구
+## 7. 배포 후 BUY 상태 판정
 
-## 7. DB migration
+### 아직 최초 시작승인 전
 
-표준 배포는 config/schema/전략세대 변경을 자동 해결하지 않습니다.
+배포 후에도 반드시:
 
-별도 migration PR에서 최소한 다음을 증명합니다.
+```text
+launch_authorized = 0
+현재 허용원금     = 0
+실제 신규 BUY     = 차단
+```
 
-- 복구 가능한 SQLite snapshot
-- 기존 schema·strategy generation 확인
-- 열린 주문·부분체결·UNKNOWN 확인
-- legacy state 변환 규칙
-- 기존 DB 호환성 테스트
-- 실패 시 코드와 DB 동시 rollback
-- 실제 거래원장 자동 삭제·초기화 금지
+이어야 합니다.
 
-완료된 일회성 migration script/workflow는 canonical 배포 표면에서 제거하고 대표 결정만 [`../HISTORY.md`](../HISTORY.md)에 요약합니다.
+### 이미 최초 시작승인 후
 
-## 8. forced dry-run과 실제 Toss 경계
+배포 직후에는 저수준 BUY halt와 startup quarantine이 먼저 켜집니다.
 
-배포 smoke는 다음 두 경계를 분리합니다.
+이후 자동복귀 여부는 **운영 프로그램이 fresh reconciliation과 안전검사를 통과한 뒤** 결정합니다. 배포 workflow가 halt를 미리 풀어주는 것이 아닙니다.
 
-### forced dry-run
+### 대표 `/halt` 상태
 
-- SQLite JDSS 원장
-- 모의 broker 보유·주문
-- dry-run reconciliation
+배포 전 `/halt` latch가 ON이었다면 새 release에서도 그대로 ON이어야 하며 자동복귀하면 안 됩니다.
 
-### 실제 Toss read-only
+---
 
-- 인증 확인
-- 계좌·시세·시장상태 조회
-- `toss-smoke`
+## 8. DB와 rollback 원칙
 
-read-only smoke가 성공해도 실제 Toss 주문이 검증되거나 dry-run 보유가 실제 계좌와 일치했다는 뜻이 아닙니다.
+### 새 service 시작 전 실패
 
-실거래에서는 토큰 발급 자체도 운영경계입니다.
+외부 주문 부작용이 없음을 증명할 수 있으면 코드·service 설정·DB를 배포 직전 상태로 복구할 수 있습니다.
 
-- client credentials로 새 access token을 발급하면 같은 credentials의 기존 운영 토큰이 무효화될 수 있으므로 **실거래 서비스가 실행 중인 동안 외부 health process가 `toss-smoke`를 실행하지 않습니다.**
-- LIVE authenticated smoke는 서비스 정지·기동과 직렬화된 배포 구간 또는 운영 프로그램 자체의 조회경계에서만 수행합니다.
-- 정기 외부 health는 LIVE에서 SSH/systemd/SQLite/clock/disk/config를 확인하고 Toss 토큰을 새로 발급하지 않습니다.
-- dry-run은 별도 live runtime token을 보호할 필요가 없으므로 기존 `toss-smoke`를 유지합니다.
+### 새 service 시작 후 실패
 
-## 9. 배포 후 검증
+실제 주문 또는 위험축소 SELL이 발생했을 가능성을 먼저 고려합니다.
 
-### source/runtime
+이 경우 과거 DB snapshot을 맹목적으로 덮어쓰지 않습니다.
 
-- 활성 `current`가 기대 기능 SHA인지
-- release-local `jdss` / `jdss-bot` 실행 가능
-- strategy/config/package 일치
-- config validation 성공
+```text
+신규 BUY 차단
+→ 실제 broker 상태 확인
+→ 현재 DB 보존
+→ reconciliation
+→ 필요 시 이전 코드만 복구
+```
 
-### 안전 잠금
+순서를 우선합니다.
 
-- forced dry-run 또는 승인된 live commissioning 상태
-- live면 신규 BUY 잠금 상태 확인
-- `portfolio.live_enabled=false`
-- application live hard lock
+불명확한 주문이 하나라도 있으면 rollback 과정에서도 재주문하지 않습니다.
 
-### service·원장
+---
 
-- service active
-- startup error 없음
-- SQLite schema/init 호환성
-- 현재 모드에 맞는 broker/SQLite reconciliation
-- SAFE_MODE 상태 확인
+## 9. Toss 인증과 health-check
 
-### 외부 read-only
+실거래 서비스가 실행 중인 동안 외부 health process가 별도 access token을 발급해 현재 runtime token을 방해하면 안 됩니다.
 
-- dry-run: Toss 인증·시세·시장상태 smoke
-- live: 외부 health는 독립 Toss token을 발급하지 않고 service/DB/config 상태를 확인
-- live authenticated Toss 확인이 필요하면 배포의 직렬화된 smoke 또는 운영 프로그램의 조회 결과를 사용
-- Telegram bot identity/outbound smoke
+LIVE에서는:
 
-### Telegram 운영 화면
+- 일반 health: systemd / DB / config / clock / disk 중심
+- authenticated Toss 확인: 서비스와 직렬화된 배포 smoke 또는 운영 프로그램 자체 조회경계
 
-배포 직후 자동 smoke는 **상태를 바꾸지 않는 read-only 확인을 우선**합니다.
+를 사용합니다.
 
-- `/ping`
-- `/help`
+Dry-run Toss smoke와 LIVE runtime의 인증경계를 같은 것으로 취급하지 않습니다.
+
+---
+
+## 10. 배포 후 Telegram smoke
+
+JH AUTO 정상 runtime에서 다음은 조회성 운영 화면입니다.
+
+- `/dashboard`
+- `/today`
+- `/auto`
 - `/portfolio`
 - `/account`
 - `/order`
 - `/errors`
+- `/help`
 
-`/today`는 BUY 후보가 준비돼 있으면 review/execution approval을 생성할 수 있으므로 단순 read-only smoke 명령으로 취급하지 않습니다. `주문 없음 / 대기 / SELL 진행 / 다건 BUY` 화면을 실제로 검증할 필요가 있을 때만 **운영자가 의도적으로 forced dry-run 승인 흐름을 점검하는 별도 시나리오**에서 사용하고, 생성된 batch는 실행·취소·만료 상태까지 확인합니다.
+특히 **JH AUTO의 `/today`는 수동 BUY approval을 생성하는 화면이 아니라 읽기 전용 자동운용 관찰화면**입니다.
 
-`/onboarding` 역시 단계 개방 callback을 누르지 않는 조회 범위에서만 배포 후 화면을 확인합니다.
+배포 smoke에서는 다음을 확인합니다.
 
-## 10. 재시작 검증
+### 최초 시작 전
 
-시장 세션이 안전할 때만 systemd restart/recovery를 실제 확인합니다.
+```text
+최초 시작승인         미승인
+현재 허용원금         $0
+최고 평가액           시작 전
+HWM75 현재 위험예산   시작 전
+실제 신규 BUY         차단
+```
 
-- restart 후 service active
-- config validation
-- 저장 target_qty·열린 주문 복구
-- 현재 모드에 맞는 reconciliation
-- SAFE_MODE 확인
+그리고 `$50,000` 연구 기준값이 실거래 고정한도로 보이지 않아야 합니다.
 
-시장 세션 때문에 restart를 생략했다면 실패를 숨기지 않고 `CURRENT_WORK.md`의 다음 검증 항목으로 남깁니다.
+### 시작 후 runtime
 
-## 11. 롤백 후 운영 확인
+- 실제 base/ratio/target/effective principal 표시
+- 실제 자동운용자산·수익률 표시
+- HWM75 현재 위험예산 표시
+- operator halt / quarantine / SAFE_MODE / open order 상태 표시
 
-1. previous release 활성 확인
-2. previous unit/service active
-3. 복원 DB와 config/schema 호환성
-4. 불명확한 주문을 수동 성공처리하지 않음
-5. reconciliation
-6. dry-run은 Toss read-only smoke, live는 별도 token issuer를 만들지 않는 직렬화된 Toss 확인
-7. Telegram 상태 확인
+Telegram 화면 확인 자체를 `/auto start`나 자금변경 승인으로 대신하지 않습니다.
 
-## 12. GitHub Actions와 변경통제
+---
 
-- `main` direct push/force push/delete 보호
-- 안정적인 required check 이름 유지
-- 문서-only PR은 runtime 영향이 없으면 fast path
-- 전략·주문·DB 변경은 관련 full gate 수행
-- 배포 workflow는 승인된 Environment secret만 사용
-- 오래된 버전 전용 workflow를 남겨 재실행 표면을 늘리지 않음
+## 11. 재시작 검증
 
-## 13. 완료 기준
+안전한 시점에 다음을 확인합니다.
 
-배포는 `service active` 하나만으로 성공이 아닙니다.
+- 두 번째 동일 live runtime 실행이 lock으로 거부됨
+- service active
+- startup quarantine 진입
+- 주문/부분체결 복구
+- 계좌·원장 대조
+- SAFE_MODE 상태
+- launch 미승인이면 BUY 계속 차단
+- launch 승인 상태라면 clean proof 후 시스템 임시격리만 자동복귀 가능
+- operator `/halt` latch는 자동복귀 금지
 
-다음이 함께 맞아야 합니다.
+시장 세션 때문에 실제 restart 검증을 생략하면 `CURRENT_WORK.md`에 미검증 항목으로 남깁니다.
 
-- 기대 기능 source가 배포됨
-- 설정·package·전략 계약 일치
-- DB와 rollback 가능성 확인
-- forced dry-run/live lock 유지
-- 원장 정합성 확인
-- 현재 모드에 맞는 Toss read-only 경계 확인
-- 필요한 Telegram smoke 확인
+---
 
-그리고 **배포 성공은 live 활성화 승인이 아닙니다.**
+## 12. 완료 기준
+
+배포 성공은 단순히 `service active`가 아닙니다.
+
+다음을 함께 확인해야 합니다.
+
+- 기대한 최신 `main` runtime 배포
+- Quality/Security 및 필요한 Backtest 성공
+- config/package/schema 일치
+- DB 무결성·rollback 가능성 확인
+- 계좌·원장 reconciliation 정상
+- 주문 결과불명 상태 없음
+- JH AUTO의 launch/halt/quarantine 상태가 배포 전 의도와 일치
+- Telegram HWM/자금/성과 표시가 실제 AUTO 계약과 일치
+
+그리고 마지막으로:
+
+> **배포 성공은 `/auto start` 승인이 아닙니다.**
