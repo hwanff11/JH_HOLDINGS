@@ -35,7 +35,7 @@ def mark_repository_as_jh_auto_live(repository: Any) -> None:
     JH AUTO live entrypoint before any broker object can submit an order.
     """
 
-    setattr(repository, "_jh_auto_live_required", True)
+    repository._jh_auto_live_required = True
 
 
 def _text(repository: Any, key: str) -> str | None:
