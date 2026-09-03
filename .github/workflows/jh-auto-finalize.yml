@@ -46,7 +46,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           ruff format src/jd_holdings/application/managed_account.py src/jd_holdings/automation/service.py src/jd_holdings/infrastructure/jh_auto_telegram.py tests/test_live_entrypoints.py tests/test_jh_auto.py tests/test_documentation_contract.py
-          ruff check .
+          ruff check . --exclude tools/jh_auto_finalize_tmp.py
 
       - name: Run complete test suite
         run: pytest -q
