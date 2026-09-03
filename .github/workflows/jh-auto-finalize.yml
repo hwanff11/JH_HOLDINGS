@@ -31,7 +31,16 @@ jobs:
           python -m pip install --constraint requirements.lock -e '.[dev]'
 
       - name: Apply finalization patch
-        run: python tools/jh_auto_finalize_tmp.py
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/jh_auto_finalize_tmp.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('"# AGENTS.md\\n",', '"# JH_HOLDINGS Agent Instructions\\n",')
+          path.write_text(text, encoding='utf-8')
+          PY
+          python tools/jh_auto_finalize_tmp.py
 
       - name: Format and lint
         run: |
