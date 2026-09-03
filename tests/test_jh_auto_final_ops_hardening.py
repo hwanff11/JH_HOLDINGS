@@ -102,7 +102,7 @@ def test_every_ramp_stage_requires_auto_fill_proof(tmp_path, config):
 
 
 def test_order_monitor_updates_auto_cycle_when_fill_arrives_later(tmp_path, config):
-    repository, _broker, service = _service(tmp_path, config)
+    repository, _broker, _service_obj = _service(tmp_path, config)
     repository.set_system_value(AUTO_RAMP_STAGE_KEY, "1")
     with repository.transaction() as connection:
         connection.execute(
@@ -128,7 +128,11 @@ def test_order_monitor_updates_auto_cycle_when_fill_arrives_later(tmp_path, conf
 
     with repository.transaction() as connection:
         row = connection.execute(
-            "SELECT status, filled_qty, completed_at FROM jh_auto_cycles WHERE cycle_id = 'cycle-1'"
+            """
+            SELECT status, filled_qty, completed_at
+            FROM jh_auto_cycles
+            WHERE cycle_id = 'cycle-1'
+            """
         ).fetchone()
     assert row["status"] == "FILLED"
     assert int(row["filled_qty"]) == 2
