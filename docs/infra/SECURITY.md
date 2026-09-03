@@ -186,9 +186,17 @@ SAFE_MODE는 단 한 번의 정상조회만으로 성공으로 추정하지 않�
 
 ## 19. Oracle 배포
 
-LIVE-ARMED 배포는 main 필수검증 확인 → 배포 전 BUY halt ON → 기존 실거래 DB·환경 보존 → JH AUTO/주문/재시작 회귀테스트 → 서비스 교체 → 계좌 read-only/reconciliation/Telegram smoke → 배포 후 BUY halt 유지 순서로 진행합니다.
+LIVE-ARMED 배포는 main 필수검증 확인 → 배포 전 저수준 BUY halt ON → 기존 실거래 DB·환경 보존 → JH AUTO/주문/재시작 회귀테스트 → 서비스 교체 → startup quarantine → 계좌 read-only/reconciliation/Telegram smoke 순서로 진행합니다.
 
-배포 과정에서 `/auto start`, `/resume`, 기준자금·비율 변경을 수행하지 않습니다.
+배포 workflow는 `/auto start`, `/resume`, 기준자금·비율 변경을 수행하지 않습니다.
+
+배포 직후의 저수준 BUY halt는 **대표 긴급정지와 동일한 의미가 아닙니다.**
+
+- 최초 시작승인 전이면 `launch_authorized=0`이므로 BUY는 계속 차단됩니다.
+- 이미 최초 시작승인이 완료된 runtime이면 fresh reconciliation, 미체결 0, SAFE_MODE 없음, 대표 `/halt` latch OFF가 모두 증명된 뒤 JH AUTO가 후속 독립 안전주기에서 **시스템 임시격리만** 자동해제할 수 있습니다.
+- 대표 `/halt` latch가 ON이면 배포·재시작 후에도 시스템이 자동해제하면 안 됩니다.
+
+따라서 배포 도구가 BUY를 직접 풀어주는 것이 아니라, 운영 프로그램의 fail-closed 재검증 결과에 따라 기존 승인상태가 안전하게 복구되는 구조입니다.
 
 ## 20. 보안/운영 변경 완료 기준
 
