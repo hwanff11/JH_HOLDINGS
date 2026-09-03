@@ -25,7 +25,7 @@ from jd_holdings.infrastructure.final_ops_runtime import (
     FinalOpsOrderMonitor as OrderMonitor,
 )
 from jd_holdings.infrastructure.final_ops_runtime import LiveRuntimeLock
-from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
+from jd_holdings.infrastructure.jh_auto_live_display import LiveJHAutoTelegramBotApp
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
 )
@@ -108,7 +108,7 @@ def _run_locked_live(settings) -> None:
         logging.getLogger(__name__).error("live 시작 정합성 검사 실패: %s", mismatches)
 
     analysis_service = AnalysisService(config, repository, data_source, market_clock)
-    app = JHAutoTelegramBotApp(
+    app = LiveJHAutoTelegramBotApp(
         config,
         settings,
         repository,
