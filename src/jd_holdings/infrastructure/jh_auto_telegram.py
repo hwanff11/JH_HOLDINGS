@@ -1,25 +1,19 @@
-# ruff: noqa: E501
 from __future__ import annotations
 
 import html
 import secrets
-import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
-import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from jd_holdings.automation import AUTO_VERSION
-from jd_holdings.automation.service import (
-    AUTO_UNITS_KEY,
-    JHAutoService,
-)
+from jd_holdings.automation.service import AUTO_UNITS_KEY
 from jd_holdings.core.v322_allocation import ALLOCATION_SYMBOLS
 
-from . import telegram_bot as telegram_bot_module
-from .live_runtime_hardening import HardenedOperationalSafetyTelegramBotApp
+from .live_runtime_hardening import AutoSellHardenedTelegramBotApp
 
 AUTO_CONFIRM_TTL_SECONDS = 300
 
@@ -31,71 +25,57 @@ class _PendingAutoChange:
     created_monotonic: float
 
 
-def _auto_bot_commands() -> list[telebot.types.BotCommand]:
-    return [
-        telebot.types.BotCommand("dashboard", "자동운용 전체 상태·수익률"),
-        telebot.types.BotCommand("today", "오늘 자동매매·종목 수익률"),
-        telebot.types.BotCommand("auto", "기준자금·자동운용비율·시작"),
-        telebot.types.BotCommand("account", "실제 토스 계좌 확인"),
-        telebot.types.BotCommand("portfolio", "종목별 보유·수익률·목표"),
-        telebot.types.BotCommand("backtest", "JDSS 전략 과거검증"),
-        telebot.types.BotCommand("halt", "대표 긴급 신규매수 정지"),
-        telebot.types.BotCommand("help", "전체 기능과 문제 대응"),
-    ]
+def _money(value: Decimal | str | int | float) -> str:
+    amount = Decimal(str(value))
+    return f"${amount:,.2f}"
 
 
-def _money(value: object) -> str:
-    return telegram_bot_module._money(value)
+def _signed_money(value: Decimal | str | int | float) -> str:
+    amount = Decimal(str(value))
+    sign = "+" if amount >= 0 else "-"
+    return f"{sign}${abs(amount):,.2f}"
 
 
-def _signed_money(value: object) -> str:
-    return telegram_bot_module._signed_money(value)
+def _percent(value: Decimal | str | int | float) -> str:
+    amount = Decimal(str(value)) * Decimal("100")
+    sign = "+" if amount >= 0 else ""
+    return f"{sign}{amount:.2f}%"
 
 
-def _percent(value: Decimal) -> str:
-    return f"{value * Decimal('100'):+.2f}%"
-
-
-def _unsigned_percent(value: Decimal) -> str:
-    return f"{value * Decimal('100'):.2f}%"
-
-
-def _quantity(value: object) -> str:
-    return telegram_bot_module._quantity(value)
-
-
-class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
+class JHAutoTelegramBotApp(AutoSellHardenedTelegramBotApp):
     """Operator console for JH AUTO 1.0.0.
 
-    Telegram is intentionally no longer the normal BUY approval surface.  It controls
-    delegated capital, launch authorization and emergency halt while the autonomous
-    scheduler reuses the existing two-step TradingService approval path internally.
+    The normal AUTO path is observation/configuration, not per-trade human approval.
+    Legacy approval handlers remain underneath for emergency compatibility, while
+    /today and allocation notifications are deliberately read-only in this layer.
     """
 
-    def __init__(self, *args, auto_service: JHAutoService, **kwargs) -> None:
+    def __init__(self, *args, auto_service, **kwargs) -> None:
         self.auto_service = auto_service
         self._auto_pending: dict[str, _PendingAutoChange] = {}
         super().__init__(*args, **kwargs)
 
     # ------------------------------------------------------------------
-    # Read-only operator views
+    # Presentation helpers
     # ------------------------------------------------------------------
     def _auto_state_label(self) -> str:
         settings = self.auto_service.settings()
-        if settings.operator_halt_latched:
-            return "🚨 대표 긴급정지"
-        if self._portfolio_safe_mode():
-            return "🚨 안전정지 · 신규매수 차단"
         if not settings.launch_authorized:
-            return "🟡 최초 시작승인 대기" if settings.configured else "⚙️ 자금설정 대기"
+            return "🟡 최초 시작 대기"
+        if settings.operator_halt_latched:
+            return "🔴 대표 긴급정지"
+        if self._portfolio_safe_mode():
+            return "🔴 안전정지(SAFE_MODE)"
         if settings.quarantine:
-            return "🛡️ 자동점검·임시격리"
+            return "🟠 자동점검·임시격리"
         if settings.state == "RUNNING":
-            return "✅ 자동운전 정상"
+            return "🟢 자동운전 정상"
         return html.escape(settings.state)
 
-    def _display_snapshot(self) -> dict[str, object]:
-        if self.portfolio_service is None:
+    def _display_snapshot(self) -> dict:
+        try:
+            return self._portfolio_snapshot()
+        except Exception:
             return {
                 "equity": Decimal("0"),
                 "cash": Decimal("0"),
@@ -104,7 +84,6 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 "risk_budget": Decimal("0"),
                 "rows": [],
             }
-        return self.portfolio_service.snapshot()
 
     def _display_performance(self) -> dict[str, Decimal]:
         settings = self.auto_service.settings()
@@ -161,7 +140,6 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"• 자동운용비율 : <code>{ratio}</code>",
                 f"• 목표 자동원금 : <code>{_money(settings.target_principal)}</code>",
                 f"• 현재 허용원금 : <code>{_money(settings.effective_principal)}</code>",
-                f"• 자금축소 회수대기 : <code>{_money(perf['pending_reduction'])}</code>",
                 f"• 자금투입 단계 : <code>{ramp}</code>",
                 "",
                 "📈 <b>현재 성과</b>",
@@ -441,84 +419,94 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"현재 기준자금 기준 목표원금은 약 <code>{_money(new_target)}</code>입니다."
             )
         elif kind == "start":
-            if not settings.configured:
-                raise RuntimeError("운용 기준자금과 자동운용비율을 먼저 설정해 주세요")
             if settings.launch_authorized:
-                raise RuntimeError("JH AUTO 최초 시작승인이 이미 완료되어 있습니다")
-            title = "JH AUTO 최초 자동운용 시작"
+                raise RuntimeError("JH AUTO는 이미 최초 시작승인이 완료되었습니다")
+            if not settings.configured:
+                raise RuntimeError("운용 기준자금과 자동운용비율을 먼저 설정해야 합니다")
+            title = "최초 자동운용 시작 검토"
             detail = (
-                f"운용 기준자금 <code>{_money(settings.base_capital or 0)}</code>\n"
-                f"자동운용비율 <code>{settings.ratio_percent or 0:.2f}%</code>\n"
-                f"목표 자동원금 <code>{_money(settings.target_principal)}</code>\n\n"
-                "승인 후에는 개별 매수승인 없이 JH AUTO가 실제 Toss 주문을 실행할 수 있습니다.\n"
-                "단, <b>이 확인 버튼 자체는 주문을 보내지 않습니다.</b> 다음 독립 안전주기에서 모든 조건을 다시 검사합니다."
+                f"목표 자동원금 <code>{_money(settings.target_principal)}</code>\n"
+                "최초 승인 후 1단계에서는 목표원금의 50%만 현재 허용원금으로 엽니다.\n"
+                "이 확인 자체는 Toss 주문을 호출하지 않습니다. 실제 BUY는 이후 독립 안전주기에서만 가능합니다."
             )
         else:
-            raise ValueError("알 수 없는 JH AUTO 변경입니다")
-        token = self._new_pending(kind, value)
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(
-            InlineKeyboardButton("취소", callback_data=f"auto_cancel|{token}"),
-            InlineKeyboardButton("✅ 변경/시작 확정", callback_data=f"auto_confirm|{token}"),
-        )
-        return f"⚠️ <b>[{title}]</b>\n\n{detail}\n\n한 번 더 확인해 주세요.", markup
+            raise ValueError("지원하지 않는 JH AUTO 설정입니다")
 
-    def _confirm_pending(self, token: str) -> str:
+        token = self._new_pending(kind, value)
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton(
+                "✅ 변경 확정" if kind != "start" else "✅ 최초 자동운용 시작 승인",
+                callback_data=f"auto_confirm|{token}",
+            ),
+            InlineKeyboardButton("취소", callback_data=f"auto_cancel|{token}"),
+        )
+        return (
+            f"⚠️ <b>[{title}]</b>\n\n{detail}\n\n"
+            "현재 상태를 다시 확인한 뒤 아래 버튼으로 확정해 주세요.",
+            markup,
+        )
+
+    def _confirm_change(self, token: str) -> str:
         self._expire_pending()
         pending = self._auto_pending.pop(token, None)
         if pending is None:
-            raise RuntimeError("확인 요청이 만료되었거나 이미 사용되었습니다")
-        if pending.kind in {"capital", "ratio"}:
-            if self.repository.open_orders():
-                raise RuntimeError("진행 중 주문이 있어 자동운용 설정을 바꿀 수 없습니다")
-            if self.auto_service.settings().launch_authorized:
-                mismatches = self.reconciliation_service.run()
-                if mismatches or self._portfolio_safe_mode():
-                    raise RuntimeError("계좌·원장 또는 안전상태가 정상일 때만 자금을 변경할 수 있습니다")
+            raise RuntimeError("만료되었거나 이미 사용한 JH AUTO 확인입니다")
+
         if pending.kind == "capital":
+            before = self.auto_service.settings()
             updated = self.auto_service.set_base_capital(pending.value)
             return (
-                "✅ 운용 기준자금을 변경했습니다.\n"
-                f"현재 기준자금 <code>{_money(updated.base_capital or 0)}</code> · "
-                f"목표 자동원금 <code>{_money(updated.target_principal)}</code>"
+                "✅ <b>[운용 기준자금 변경 완료]</b>\n\n"
+                f"• 기준자금 : <code>{_money(before.base_capital or 0)}</code> → "
+                f"<code>{_money(updated.base_capital or 0)}</code>\n"
+                f"• 목표 자동원금 : <code>{_money(updated.target_principal)}</code>\n"
+                f"• 현재 허용원금 : <code>{_money(updated.effective_principal)}</code>\n\n"
+                "증액은 추가분만 단계적으로 열고, 감액은 위험축소를 우선합니다."
             )
         if pending.kind == "ratio":
+            before = self.auto_service.settings()
             updated = self.auto_service.set_ratio_percent(pending.value)
             return (
-                "✅ 자동운용비율을 변경했습니다.\n"
-                f"현재 비율 <code>{updated.ratio_percent or 0:.2f}%</code> · "
-                f"목표 자동원금 <code>{_money(updated.target_principal)}</code>"
+                "✅ <b>[자동운용비율 변경 완료]</b>\n\n"
+                f"• 비율 : <code>{before.ratio_percent or 0:.2f}%</code> → "
+                f"<code>{updated.ratio_percent or 0:.2f}%</code>\n"
+                f"• 목표 자동원금 : <code>{_money(updated.target_principal)}</code>\n"
+                f"• 현재 허용원금 : <code>{_money(updated.effective_principal)}</code>"
             )
         if pending.kind == "start":
             before_orders = len(self.repository.open_orders())
             updated = self.auto_service.authorize_launch()
             after_orders = len(self.repository.open_orders())
             if after_orders != before_orders:
-                self.auto_service.quarantine("LAUNCH_CALLBACK_CREATED_ORDER")
-                raise RuntimeError("최초 시작승인 처리 중 주문 상태가 바뀌어 안전격리했습니다")
+                self.auto_service.quarantine("LAUNCH_CALLBACK_ORDER_SIDE_EFFECT")
+                raise RuntimeError("최초 시작확인 중 주문상태가 변해 안전격리했습니다")
             return (
                 "✅ <b>[JH AUTO 최초 시작승인 완료]</b>\n\n"
                 f"• 목표 자동원금 : <code>{_money(updated.target_principal)}</code>\n"
                 f"• 현재 허용원금(1단계) : <code>{_money(updated.effective_principal)}</code>\n"
-                "• 실제 BUY : <b>이 버튼에서는 0건</b>\n\n"
-                "다음 독립 안전주기에서 계좌·원장·시장·가격·수량을 처음부터 다시 확인한 뒤에만 자동매수가 가능해집니다."
+                "• 이 버튼에서 실제 BUY : <code>0건</code>\n\n"
+                "다음 독립 안전주기에서 계좌·원장·시장시간·목표·가격을 다시 확인한 뒤 "
+                "조건이 모두 맞을 때만 자동매매가 시작됩니다."
             )
-        raise RuntimeError("지원하지 않는 확인 요청입니다")
+        raise RuntimeError("지원하지 않는 JH AUTO 확인입니다")
 
     def _format_recent_cycles(self) -> str:
         rows = self.auto_service.recent_cycles(5)
-        lines = ["📋 <b>[최근 JH AUTO 자동주문]</b>", ""]
         if not rows:
-            lines.append("아직 자동주문 기록이 없습니다.")
-            return "\n".join(lines)
+            return "📋 최근 JH AUTO 자동주문 이력이 없습니다."
+        lines = ["📋 <b>[최근 JH AUTO 자동주문]</b>"]
         for row in rows:
             lines.append(
-                f"• <b>{html.escape(str(row.get('symbol') or '-'))}</b> "
-                f"<code>{row.get('filled_qty', 0)}/{row.get('requested_qty', 0)}주</code> · "
-                f"<code>{html.escape(str(row.get('status') or '-'))}</code>"
+                f"• {html.escape(str(row['symbol']))} · "
+                f"<code>{html.escape(str(row['status']))}</code> · "
+                f"{int(row.get('filled_qty') or 0)}/{int(row.get('requested_qty') or 0)}주"
             )
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------
+    # Handler registration
+    # ------------------------------------------------------------------
     def _register_handlers(self) -> None:
         super()._register_handlers()
         bot = self.bot
@@ -533,88 +521,80 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                     text, markup = self._format_auto_control()
                     self._send(text, markup=markup)
                     return
-                if len(parts) == 3 and parts[1].lower() in {"capital", "ratio"}:
-                    text, markup = self._review_change(parts[1].lower(), parts[2])
-                    self._send(text, markup=markup)
-                    return
                 if len(parts) == 2 and parts[1].lower() == "start":
                     text, markup = self._review_change("start", "1")
                     self._send(text, markup=markup)
                     return
-                raise ValueError("형식: /auto | /auto capital 50000 | /auto ratio 20 | /auto start")
+                if len(parts) == 3 and parts[1].lower() == "capital":
+                    text, markup = self._review_change("capital", parts[2])
+                    self._send(text, markup=markup)
+                    return
+                if len(parts) == 3 and parts[1].lower() == "ratio":
+                    text, markup = self._review_change("ratio", parts[2])
+                    self._send(text, markup=markup)
+                    return
+                self._send(
+                    "사용법: <code>/auto</code> · <code>/auto capital 50000</code> · "
+                    "<code>/auto ratio 20</code> · <code>/auto start</code>"
+                )
             except Exception as exc:
                 self._send(
-                    "⛔ JH AUTO 요청을 처리하지 않았습니다.\n"
-                    f"<code>{html.escape(telegram_bot_module._operator_error_summary(exc))}</code>"
+                    "⛔ JH AUTO 설정을 처리하지 못했습니다.\n"
+                    f"<code>{html.escape(str(exc))}</code>"
                 )
 
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("auto_status|"))
+        @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("auto_status|"))
         def auto_status_callback(call):
             if not self._authorized_callback(call):
-                bot.answer_callback_query(call.id, "권한이 없습니다.", show_alert=True)
                 return
+            self._clear_callback_markup(call)
             text, markup = self._format_auto_control()
             self._send(text, markup=markup)
-            bot.answer_callback_query(call.id, "최신 상태를 확인했습니다.")
+            bot.answer_callback_query(call.id, "JH AUTO 상태를 새로고침했습니다.")
 
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("auto_recent|"))
-        def auto_recent_callback(call):
-            if not self._authorized_callback(call):
-                bot.answer_callback_query(call.id, "권한이 없습니다.", show_alert=True)
-                return
-            self._send(self._format_recent_cycles())
-            bot.answer_callback_query(call.id)
-
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("auto_review|"))
+        @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("auto_review|"))
         def auto_review_callback(call):
             if not self._authorized_callback(call):
-                bot.answer_callback_query(call.id, "권한이 없습니다.", show_alert=True)
                 return
+            self._clear_callback_markup(call)
             try:
-                _, kind, value = call.data.split("|", 2)
+                _prefix, kind, value = str(call.data).split("|", 2)
                 text, markup = self._review_change(kind, value)
-                self._send(text, markup=markup)
-                bot.answer_callback_query(call.id, "한 번 더 확인해 주세요.")
             except Exception as exc:
-                bot.answer_callback_query(
-                    call.id,
-                    telegram_bot_module._operator_error_summary(exc),
-                    show_alert=True,
-                )
+                bot.answer_callback_query(call.id, "설정을 검토할 수 없습니다.", show_alert=True)
+                self._send(f"⛔ <code>{html.escape(str(exc))}</code>")
+                return
+            self._send(text, markup=markup)
+            bot.answer_callback_query(call.id, "최종 확인이 필요합니다.")
 
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("auto_confirm|"))
+        @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("auto_confirm|"))
         def auto_confirm_callback(call):
             if not self._authorized_callback(call):
-                bot.answer_callback_query(call.id, "권한이 없습니다.", show_alert=True)
                 return
+            self._clear_callback_markup(call)
+            token = str(call.data).split("|", 1)[1]
             try:
-                _, token = call.data.split("|", 1)
-                result = self._confirm_pending(token)
-                self._clear_callback_markup(call)
-                self._send(result)
-                bot.answer_callback_query(call.id, "적용했습니다.")
+                text = self._confirm_change(token)
             except Exception as exc:
-                bot.answer_callback_query(
-                    call.id,
-                    telegram_bot_module._operator_error_summary(exc),
-                    show_alert=True,
-                )
+                bot.answer_callback_query(call.id, "적용하지 못했습니다.", show_alert=True)
+                self._send(f"⛔ <code>{html.escape(str(exc))}</code>")
+                return
+            self._send(text)
+            bot.answer_callback_query(call.id, "적용했습니다.")
 
-        @bot.callback_query_handler(func=lambda call: call.data.startswith("auto_cancel|"))
+        @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("auto_cancel|"))
         def auto_cancel_callback(call):
             if not self._authorized_callback(call):
-                bot.answer_callback_query(call.id, "권한이 없습니다.", show_alert=True)
                 return
-            _, token = call.data.split("|", 1)
-            self._auto_pending.pop(token, None)
             self._clear_callback_markup(call)
+            token = str(call.data).split("|", 1)[1]
+            self._auto_pending.pop(token, None)
             bot.answer_callback_query(call.id, "취소했습니다.")
 
-    def run(self) -> None:
-        self.bot.set_my_commands(_auto_bot_commands())
-        threading.Thread(target=self._scheduler_loop, daemon=True).start()
-        telegram_bot_module.LOGGER.info(
-            "JH AUTO %s Telegram polling 시작 (JDSS strategy 3.2.2)",
-            AUTO_VERSION,
-        )
-        self.bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+        @bot.callback_query_handler(func=lambda call: str(call.data or "").startswith("auto_recent|"))
+        def auto_recent_callback(call):
+            if not self._authorized_callback(call):
+                return
+            self._clear_callback_markup(call)
+            self._send(self._format_recent_cycles())
+            bot.answer_callback_query(call.id, "최근 자동주문을 확인했습니다.")
