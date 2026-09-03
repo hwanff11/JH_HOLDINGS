@@ -11,6 +11,7 @@ from jd_holdings.settings import RuntimeSettings
 
 from .broker import Broker
 from .database import ALL_ORDER_STATUSES, SQLiteRepository
+from .jh_auto_guard import require_live_auto_buy_contract
 from .managed_account import reserve_buy_order_with_managed_cash
 from .operational_safety import BUY_EXECUTION_LOCK, OPERATOR_BUY_HALT_KEY
 
@@ -55,6 +56,14 @@ class OrderManager:
         self.settings.require_live_trading()
         if self.repository.get_system_value(LIVE_COMMISSIONED_KEY) != "1":
             raise RuntimeError("실거래 준비 전환이 완료된 전용 원장이 아닙니다")
+
+    def _require_live_auto_contract(self, *, final_submission: bool) -> None:
+        if self.settings.trading_mode != "live":
+            return
+        require_live_auto_buy_contract(
+            self.repository,
+            require_regular_session=final_submission,
+        )
 
     def _buy_is_safe_mode_blocked(self, symbol: str) -> bool:
         """Keep every risk-increasing order behind the persisted SAFE_MODE boundary."""
@@ -150,6 +159,10 @@ class OrderManager:
         if is_buy and self._buy_is_safe_mode_blocked(request.symbol):
             raise RuntimeError("SAFE_MODE 상태라 신규 BUY가 차단되어 있습니다")
         if is_buy:
+            # JH AUTO is revalidated independently from the strategy/order quantity
+            # calculation. In LIVE this prevents a missing/corrupt AUTO state from
+            # falling back to the JDSS $50k research reference.
+            self._require_live_auto_contract(final_submission=False)
             if request.price is None:
                 raise RuntimeError("JDSS 매수는 관리현금 검증 가능한 지정가만 허용합니다")
             reserved = reserve_buy_order_with_managed_cash(
@@ -203,6 +216,10 @@ class OrderManager:
                         raise RuntimeError(
                             "SAFE_MODE가 활성화되어 BUY 제출을 중단했습니다"
                         )
+                    # Immediately before the account-changing POST, independently
+                    # recompute AUTO capital invariants and use the real current time.
+                    # Any missing/corrupt value is fail-closed.
+                    self._require_live_auto_contract(final_submission=True)
                     receipt = self.broker.place_order(request)
             else:
                 receipt = self.broker.place_order(request)
