@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -16,26 +16,18 @@ from .prelive_hardening import (
 )
 from .service import (
     AUTO_LAST_CYCLE_KEY,
-    AUTO_OPERATOR_HALT_LATCH_KEY,
-    AUTO_QUARANTINE_KEY,
-    AUTO_RAMP_STAGE_KEY,
-    AUTO_STATE_KEY,
     OPERATOR_BUY_HALT_KEY,
     TARGET_QTY_GENERATION_KEY,
+    AutoExecutionResult,
 )
 
 AUTO_RAMP_STAGE_AUTO_FILL_KEY = "jh_auto_ramp_stage_auto_fill_seen"
 NEW_YORK_TZ = ZoneInfo("America/New_York")
+TERMINAL_AUTO_STATUSES = {"FILLED", "CANCELED", "REJECTED", "REPLACED", "UNKNOWN"}
 
 
 class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
-    """Final live-operation guards layered on top of the pre-live hardening.
-
-    The strategy math is unchanged.  This class tightens only operational behavior:
-    every capital-ramp stage must observe a real AUTO fill, attempt limits follow the
-    US trading date, and the live order row is linked to the JH AUTO cycle that caused
-    it so later fills can be reconciled back into the automation ledger.
-    """
+    """Final live-operation guards without changing JDSS 3.2.2 strategy math."""
 
     @classmethod
     def bootstrap_repository(cls, repository: Any) -> None:
@@ -62,9 +54,8 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
     def _stage_filled(self) -> bool:
         if not super()._stage_filled():
             return False
-        # Capital is never promoted merely because integer rounding made every target
-        # already satisfied.  Each 50 -> 75 -> 100 stage must prove at least one real
-        # JH AUTO fill under that stage's own authorized capital.
+        # Integer rounding alone must never promote capital. Every 50 -> 75 -> 100
+        # stage must prove at least one real AUTO fill under that stage's capital.
         return self.repository.get_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY) == "1"
 
     def advance_ramp_if_ready(self) -> bool:
@@ -76,12 +67,10 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
         return changed
 
     def _enforce_attempt_limits(self, current: datetime) -> bool:
-        """Count attempts by the New York trading date, not by UTC midnight."""
+        """Count attempts by the New York trading date, not UTC midnight."""
         eastern = current.astimezone(NEW_YORK_TZ)
         day_start_local = eastern.replace(hour=0, minute=0, second=0, microsecond=0)
-        next_day_local = day_start_local.replace(day=day_start_local.day) + __import__(
-            "datetime"
-        ).timedelta(days=1)
+        next_day_local = day_start_local + timedelta(days=1)
         day_start = day_start_local.astimezone(UTC)
         next_day = next_day_local.astimezone(UTC)
 
@@ -110,7 +99,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
         return True
 
     def execute_one(self, trading_service: Any, *, now: datetime | None = None):
-        """Execute at most one BUY and bind the broker order to its AUTO cycle."""
+        """Execute at most one BUY and bind its broker order to the AUTO cycle."""
         current = now or datetime.now(UTC)
         if current.tzinfo is None:
             current = current.replace(tzinfo=UTC)
@@ -147,7 +136,6 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
         signal_id = int(signal["signal_id"])
         symbol = str(signal["symbol"])
         cycle_id = f"JHAUTO-{uuid4().hex[:20]}"
-        started = current.isoformat()
         with self.repository.transaction() as connection:
             connection.execute(
                 """
@@ -155,7 +143,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
                     cycle_id, signal_id, symbol, status, started_at
                 ) VALUES (?, ?, ?, 'REVIEWING', ?)
                 """,
-                (cycle_id, signal_id, symbol, started),
+                (cycle_id, signal_id, symbol, current.isoformat()),
             )
         self.repository.set_system_value(AUTO_LAST_CYCLE_KEY, cycle_id)
 
@@ -244,7 +232,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
                         ensure_ascii=False,
                     ),
                     datetime.now(UTC).isoformat()
-                    if status in {"FILLED", "CANCELED", "REJECTED", "REPLACED", "UNKNOWN"}
+                    if status in TERMINAL_AUTO_STATUSES
                     else None,
                     cycle_id,
                 ),
@@ -263,8 +251,6 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
                 "filled_quantity": int(receipt.filled_quantity),
             },
         )
-        from .service import AutoExecutionResult
-
         return AutoExecutionResult(
             cycle_id=cycle_id,
             signal_id=signal_id,
