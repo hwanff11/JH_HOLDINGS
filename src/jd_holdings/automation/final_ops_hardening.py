@@ -43,7 +43,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
             return before
 
         # A commissioned V3.2.2 ledger may still contain the historical $50k
-        # research HWM/risk state even though JH AUTO has never traded.  Prove launch
+        # research HWM/risk state even though JH AUTO has never traded. Prove launch
         # eligibility first, then discard only those legacy capital-state values so
         # stage-1 HWM starts from the operator-authorized effective principal.
         self._preflight_launch()
@@ -54,14 +54,11 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
         try:
             updated = super().authorize_launch()
         except Exception:
-            if old_hwm is None:
-                self.repository.delete_system_value(V322_HWM_KEY)
-            else:
-                self.repository.set_system_value(V322_HWM_KEY, old_hwm)
-            if old_risk is None:
-                self.repository.delete_system_value(V322_RISK_BUDGET_KEY)
-            else:
-                self.repository.set_system_value(V322_RISK_BUDGET_KEY, old_risk)
+            # A missing legacy key and an explicit zero are equivalent before AUTO
+            # launch. Avoid relying on a delete API that the repository intentionally
+            # does not expose.
+            self.repository.set_system_value(V322_HWM_KEY, old_hwm or "0")
+            self.repository.set_system_value(V322_RISK_BUDGET_KEY, old_risk or "0")
             raise
 
         if updated.ramp_stage > 0:
