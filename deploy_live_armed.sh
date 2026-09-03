@@ -305,21 +305,19 @@ sudo systemctl is-active --quiet "$service_name"
 test "$(readlink -f "$target_dir/current")" = "$release_dir"
 assert_live_markers "$target_dir/current"
 
-# 새 봇이 확정된 운영자 메뉴를 Telegram에 등록했는지 읽기 전용으로 확인합니다.
+# 새 봇이 코드가 선언한 JH AUTO 운영자 메뉴를 Telegram에 등록했는지 읽기 전용으로 확인합니다.
 "$target_dir/current/.venv/bin/python" - <<'PY'
 import json
 import os
 import time
-import urllib.parse
 import urllib.request
+
+from jd_holdings.infrastructure.jh_auto_telegram import _auto_bot_commands
 
 token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 if not token:
     raise SystemExit("Telegram bot token이 없습니다")
-expected = [
-    "dashboard", "today", "account", "portfolio",
-    "backtest", "onboarding", "halt", "help",
-]
+expected = [item.command for item in _auto_bot_commands()]
 url = f"https://api.telegram.org/bot{token}/getMyCommands"
 for attempt in range(5):
     with urllib.request.urlopen(url, timeout=10) as response:
