@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+
+from jd_holdings.infrastructure import telegram_bot as telegram_bot_module
 from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp, _money
 
 
@@ -25,24 +28,63 @@ class LiveJHAutoTelegramBotApp(JHAutoTelegramBotApp):
         "증액은 추가분을 단계적으로 열고, 감액은 위험축소를 우선합니다."
     )
 
+    def _register_handlers(self) -> None:
+        """Register the LIVE AUTO dashboard before the inherited legacy dashboard.
+
+        The inherited V3 dashboard refreshes roughly 500 days of SPY/QQQ/sector and
+        enabled-symbol market data before JH AUTO replaces the rendered text.  In LIVE
+        AUTO that analysis is redundant for a read-only dashboard request, so the
+        first-match handler serves the JH AUTO dashboard directly from SQLite safety
+        state plus the presentation-only portfolio snapshot.
+        """
+        bot = self.bot
+
+        @bot.message_handler(commands=["dashboard", "d"])
+        def live_auto_dashboard(message):
+            if not self._authorized_message(message):
+                return
+            started = time.perf_counter()
+            try:
+                self._send(
+                    self._format_auto_dashboard(),
+                    markup=self._dashboard_markup(),
+                )
+            except Exception as exc:
+                telegram_bot_module.LOGGER.exception("JH AUTO dashboard fast-path 실패")
+                self._send(
+                    "❌ 대시보드를 가져오지 못했습니다.\n"
+                    f"<code>{telegram_bot_module._operator_error_summary(exc)}</code>"
+                )
+                return
+            elapsed = time.perf_counter() - started
+            log = (
+                telegram_bot_module.LOGGER.info
+                if elapsed >= 0.75
+                else telegram_bot_module.LOGGER.debug
+            )
+            log("JH AUTO dashboard 응답 준비 %.3fs (legacy analyze_all 생략)", elapsed)
+
+        # pyTelegramBotAPI evaluates message handlers in registration order and stops
+        # after the first normal handler.  Register the direct AUTO handler first, then
+        # retain every inherited compatibility/emergency handler unchanged.
+        super()._register_handlers()
+
     def _replace_hwm_lines(self, text: str) -> str:
         settings = self.auto_service.settings()
-        perf = self._display_performance()
-        current_hwm = _money(perf["high_water"])
-        current_budget = _money(perf["risk_budget"])
-
         if settings.launch_authorized:
             return text.replace("HWM75 위험한도", "HWM75 현재 위험예산")
 
-        text = text.replace(
-            f"• 최고 평가액 : <code>{current_hwm}</code>",
-            "• 최고 평가액 : <b>시작 전</b>",
-        )
-        text = text.replace(
-            f"• HWM75 위험한도 : <code>{current_budget}</code>",
-            "• HWM75 현재 위험예산 : <b>시작 전</b>",
-        )
-        return text
+        # Before first launch all legacy HWM amounts are presentation-only noise.  The
+        # exact numeric value does not need another portfolio snapshot just to replace
+        # the line, so avoid a second read on dashboard/portfolio rendering.
+        lines: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("• 최고 평가액 :"):
+                line = "• 최고 평가액 : <b>시작 전</b>"
+            elif line.startswith("• HWM75 위험한도 :"):
+                line = "• HWM75 현재 위험예산 : <b>시작 전</b>"
+            lines.append(line)
+        return "\n".join(lines)
 
     @staticmethod
     def _insert_before(text: str, marker: str, extra: str) -> str:
