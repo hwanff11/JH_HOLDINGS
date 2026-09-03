@@ -50,6 +50,21 @@ def test_capital_notes_are_idempotent():
     assert once.count(note) == 1
 
 
+def test_duplicate_capital_reduction_line_is_shown_once():
+    text = "\n".join(
+        [
+            "💰 자동운용 자금",
+            "• 자금축소 회수대기 : <code>$0.00</code>",
+            "📈 현재 성과",
+            "• 자금축소 회수대기 : <code>$0.00</code>",
+        ]
+    )
+
+    rendered = LiveJHAutoTelegramBotApp._dedupe_dashboard_capital_lines(text)
+
+    assert rendered.count("자금축소 회수대기") == 1
+
+
 def test_prelaunch_daily_brief_hides_legacy_capital_and_manual_approval_language():
     app = _app(launch_authorized=False)
     text = "\n".join(
