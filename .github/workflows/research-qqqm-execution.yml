@@ -25,6 +25,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --constraint requirements.lock -e .
+          # yfinance repair=True invokes sklearn for historical-price repair.
+          # Research runner installs it locally without changing production dependencies.
+          python -m pip install 'scikit-learn>=1.7,<2'
       - name: Run QQQM execution simulation
         run: |
           set -Eeuo pipefail
