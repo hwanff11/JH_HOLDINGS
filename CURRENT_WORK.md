@@ -8,7 +8,7 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- Oracle 실거래 runtime 배포본: **`29333dcbaa2776a897059d13c0e9f9191560693e`**
+- Oracle 실거래 runtime 배포본: **`086f9f63dc3e0715a2c5080bc7190b27ab133ac0`**
 - Oracle 서비스: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - 실거래 준비 완료 표시(`live_commissioned`): **ON**
@@ -22,7 +22,7 @@
 - 위험축소 SELL: **자동**, 불확실 상태에서는 안전정지와 계좌·원장 대조 우선
 - UNKNOWN 주문: **자동 재전송 금지**
 
-현재 runtime은 PR #327 Telegram 조회 최적화 병합본과 일치합니다. 이후 문서-only 상태판 변경은 Oracle runtime 재배포 대상이 아닙니다.
+현재 runtime은 PR #330 `/dashboard` fast-path 병합본과 일치합니다. 이후 문서-only 상태판 변경은 Oracle runtime 재배포 대상이 아닙니다.
 
 ## 2. JH AUTO 1.0.0 반영 완료
 
@@ -85,7 +85,26 @@ PR #327에서 다음을 적용했습니다.
 
 PR #327 head `d9774f128bfe1d004103e893059d9acba8936539`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `29333dcbaa2776a897059d13c0e9f9191560693e`입니다. 병합 후 `main` Quality Gate와 Security도 통과했습니다.
 
-Oracle LIVE-ARMED 배포는 GitHub Issue #328 / Actions run `33744473969`에서 성공했고, 실제 runtime은 `29333dcbaa2776a897059d13c0e9f9191560693e`입니다.
+Oracle LIVE-ARMED 배포는 GitHub Issue #328 / Actions run `33744473969`에서 성공했습니다.
+
+### PR #330 — `/dashboard` 전용 fast-path
+
+PR #327 이후 `/portfolio`와 `/today`는 빨라졌지만 `/dashboard`만 상대적으로 느린 원인을 다시 추적했습니다. 기존 상위 V3 dashboard handler가 단순 조회 요청마다 `analysis_service.analyze_all()`을 먼저 실행해 약 500일치 SPY/QQQ/SOXX/SMH/TQQQ/SOXL 일봉을 refresh·지표계산한 뒤, JH AUTO 표시계층에서 해당 legacy dashboard 문구를 버리고 AUTO dashboard를 다시 생성하고 있었습니다.
+
+PR #330에서 다음을 적용했습니다.
+
+- LIVE JH AUTO의 `/dashboard`와 `/d`를 inherited V3 dashboard보다 먼저 처리하는 전용 fast-path 추가
+- 단순 dashboard 조회에서는 legacy `analysis_service.analyze_all()` 전체 재계산을 생략
+- 대시보드는 SQLite 안전상태와 기존 표시 전용 portfolio snapshot으로 직접 생성
+- 최초 시작 전 HWM 문구 보정에서 불필요한 두 번째 performance snapshot 제거
+- dashboard 준비시간이 0.75초 이상이면 서버 로그에 기록
+- fast-path handler 우선순위와 prelaunch HWM 무추가조회 회귀테스트 추가
+
+`/score` 등 명시적으로 전략분석을 요청하는 기능과 scheduler의 전략계산은 그대로 유지합니다. 전략수학, allocation, OrderManager, Toss 주문 write path, reconciliation, SAFE_MODE 경계는 변경하지 않았습니다.
+
+PR #330 head `2f589fbac97a2334b33eb9139fd174952e0ea0f5`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `086f9f63dc3e0715a2c5080bc7190b27ab133ac0`입니다. 병합 후 `main` Quality Gate와 Security도 통과했습니다.
+
+Oracle LIVE-ARMED 배포는 GitHub Issue #331 / Actions run `33747287589`에서 성공했고, 실제 runtime은 `086f9f63dc3e0715a2c5080bc7190b27ab133ac0`입니다.
 
 최종 배포 검증 결과:
 
@@ -131,7 +150,7 @@ JH AUTO는 한 안전주기에서 신규 BUY를 최대 1건만 실행합니다. 
 
 ## 6. 바로 다음 작업
 
-코드·문서·실운영 배포·실거래 안전검증·Telegram 조회 최적화까지 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
+코드·문서·실운영 배포·실거래 안전검증·Telegram 조회 최적화·`/dashboard` fast-path까지 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
 
 Telegram에서 다음 순서로 진행합니다.
 
