@@ -154,3 +154,4 @@ def test_live_entrypoint_uses_final_ops_guards():
     assert "FinalOpsOrderMonitor" in source
     assert "FinalOpsLiveInitialOnboardingPortfolioService" in source
     assert "LiveRuntimeLock" in source
+    assert "LiveJHAutoTelegramBotApp" in source

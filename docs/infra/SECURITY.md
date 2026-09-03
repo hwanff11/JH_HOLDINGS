@@ -1,310 +1,205 @@
-#
+# JH_HOLDINGS 보안·주문 안전 기준
 
-## JH AUTO 1.0.0 자동매수 불변식
+이 문서는 **JH AUTO 1.0.0 실거래의 보안·주문 안전 불변식**을 소유합니다. 투자전략 숫자는 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 자동운용 자금·상태계약은 [`../JH_AUTO_SPEC.md`](../JH_AUTO_SPEC.md), 현재 배포상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 따릅니다.
 
-JH AUTO의 위험증가 BUY는 최종 주문예약 경계에서 다음 상태를 모두 **정확한 정상값**으로 다시 확인합니다.
+## 1. 운영자가 먼저 기억할 원칙
 
-- 최초 시작승인 `ON`
-- 시스템 임시격리 `OFF`
-- 대표 긴급정지 latch `OFF` — 누락·손상도 차단
-- 자동운용 상태 `RUNNING`
-- 현재 허용원금 `> 0`
-- 기존 `operator_buy_halt=0`
-- SAFE_MODE 없음
-- HWM75/현재 허용원금/미체결 예약/브로커 매수가능금액 범위 안
+1. **배포와 자동운용 시작은 별개** — `/auto start` 최초 승인 전 실제 신규 BUY 0건
+2. **정상 JH AUTO에서는 개별 BUY마다 사람이 승인하지 않음** — 기존 review/execution 2단계 검증코드는 JH AUTO가 내부적으로 소비
+3. **결과가 불명확하면 재주문하지 않음** — `UNKNOWN`은 실패가 아니라 결과 미확정
+4. **계좌와 원장이 다르면 신규 BUY 차단**
+5. **대표 `/halt`는 시스템이 자동해제하지 않음**
+6. **JDSS `$50,000`은 연구 기준값** — 실거래 한도는 대표가 정한 JH AUTO 자금상태에서 계산
 
-Telegram 시작확인 callback 자체는 주문을 제출하지 않습니다. 첫 BUY는 다음 독립 안전주기에서만 가능합니다. 자동 BUY는 미국 정규장·한 안전주기 최대 한 종목으로 시작하며, 주문 쓰기 결과가 UNKNOWN이면 즉시 신규 BUY를 격리하고 같은 주문을 자동 재전송하지 않습니다.
-
-운영자 `/halt`는 시스템 임시격리와 별도의 durable latch를 남깁니다. 시스템은 계좌가 다시 정상으로 보여도 이 latch를 자동해제하지 않습니다.
- JH_HOLDINGS 보안·주문 안전 기준
-
-이 문서는 **비밀정보, Telegram 관리자 인증, 매수 승인, 중복주문 방지, SQLite 원장, Toss API, GitHub Actions, Oracle 배포와 실거래 잠금의 기술적 안전 원칙**을 소유합니다.
-
-전략 숫자는 [`../JDSS_FINAL_SPEC.md`](../JDSS_FINAL_SPEC.md)와 [`../../strategy.yaml`](../../strategy.yaml), 현재 배포·실거래 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 따릅니다.
-
-운영자가 먼저 기억할 원칙은 세 가지입니다: **매수는 2단계 승인, 결과가 불명확하면 재주문 금지, 계좌와 원장이 다르면 안전정지**입니다. 아래 영문은 실제 코드·장애코드 확인을 위해 필요한 경우에만 유지합니다.
-
-## 1. 신뢰 경계
+## 2. 신뢰 경계
 
 | 경계 | 신뢰 가능한 것 | 항상 다시 검증할 것 |
 |---|---|---|
-| Telegram | 설정된 관리자 Chat ID | private chat, `from_user`, callback 단계, token, TTL, stale button |
-| JDSS 내부 | 검증된 설정과 커밋된 DB transaction | 환경변수, 기존 DB, 외부 입력 |
-| Dry-run broker | 현재 프로세스·SQLite로 증명되는 모의상태 | 재시작 복원, 부분체결, 열린 주문 |
-| Toss OpenAPI | 고정된 공식 HTTPS endpoint | 인증, HTTP, JSON, 숫자 범위, 실제 계좌·주문 상태 |
-| GitHub Actions | 보호된 main과 승인된 Environment | source SHA, 요청 주체, secret 존재, workflow 권한 |
-| Oracle | 배포된 release 구조 | SSH host key, 환경파일 권한, DB·서비스·원장 상태 |
+| Telegram | 설정된 관리자 Chat ID | private chat, `from_user`, callback token/TTL, 현재 DB 상태 |
+| JDSS | 검증된 전략 설정과 목표비중 | 데이터 freshness, generation, 현재 자금경계 |
+| JH AUTO | 커밋된 자동운용 상태 | 기준자금·비율·허용원금·launch/quarantine/halt 상태 불변식 |
+| SQLite | transaction으로 확정된 원장 | broker 실제 상태와 reconciliation |
+| Toss OpenAPI | 공식 HTTPS endpoint의 현재 응답 | 인증, 숫자범위, order ID, 실제 주문/보유/매수가능금액 |
+| GitHub Actions | 보호된 main과 승인된 workflow | source SHA, 실행주체, Environment, secret 존재 |
+| Oracle | 배포된 release | 서비스 단일실행, DB, 계좌·원장, BUY 잠금 |
 
-Dry-run broker와 Toss OpenAPI는 서로 다른 경계입니다. 한쪽 성공을 다른 쪽 성공으로 간주하지 않습니다.
+한 경계의 성공을 다른 경계의 성공으로 간주하지 않습니다.
 
-## 2. 공개 저장소와 비밀정보
+## 3. 공개 저장소와 비밀정보
 
-다음을 Git·로그·Markdown·Issue·테스트 fixture에 기록하지 않습니다.
+Git·로그·Markdown·Issue·테스트 fixture에 `.env` 실제 값, Telegram token, Toss key/secret·인증 header, SSH private key, 전체 계좌번호, approval raw token, GitHub Environment secret을 기록하지 않습니다.
 
-- `.env` 실제 값
-- Telegram Bot Token
-- Toss 앱 key/secret과 인증 header
-- SSH private key
-- 전체 계좌번호
-- approval raw token
-- GitHub Environment secret
+공개 문서에는 불필요한 서버 절대경로·OS 사용자명·host 식별자·실제 backup 파일명을 남기지 않습니다. 노출이 의심되면 BUY를 먼저 잠그고 자격증명을 폐기·재발급한 뒤 Gitleaks와 로그로 범위를 확인합니다.
 
-공개 Markdown에는 서버 절대경로·OS 사용자명·서비스 실명·host 식별자·실제 backup/snapshot 파일명·장기 보존할 필요가 없는 일회성 run ID를 적지 않습니다.
+## 4. GitHub 변경 통제
 
-`.env.example`에는 secret 이름과 비밀이 아닌 안전한 기본값만 둡니다.
-
-의심 노출이 있으면 live를 잠그고 자격증명을 폐기·재발급한 뒤 history까지 Gitleaks로 확인합니다.
-
-## 3. `main` 변경 통제
-
-- PR 없는 기능 변경 금지
-- force push 금지
-- branch delete 보호
-- 안정적인 필수 check 이름 유지
-- Quality Gate와 Security Gate 필수
+- 기능 변경은 별도 branch + PR
+- 보호된 `main` 직접 push/force push 금지
+- Quality Gate / Security Gate 필수
 - 전략·백테스트 민감 변경은 canonical Backtest 확인
-- Actions 기본 권한은 `contents: read`, 필요한 workflow만 최소 추가 권한
-- 외부 GitHub Action은 검증한 40자리 commit SHA로 고정하고 표시용 major 버전 주석만 병기
-- 문서-only 변경은 안전한 fast path를 사용하고 runtime을 불필요하게 재배포하지 않음
+- Actions 기본 권한은 최소권한
+- 외부 Action은 검증된 commit SHA로 고정
+- LIVE 배포는 저장소 owner가 명시적으로 요청한 경로만 사용
+- 배포 전 BUY halt를 먼저 ON
+- 배포는 `/resume`, `/auto start`, 자금증액을 대신하지 않음
 
-branch protection이 비활성화되면 코드가 정상이어도 production 변경통제는 미완료로 봅니다.
+## 5. Telegram 관리자 인증
 
-## 4. Telegram 관리자 인증
-
-- 정확히 1개의 관리자 Chat ID를 허용
+- 정확히 1개의 관리자 Chat ID 허용
 - private chat만 허용
-- `chat.id`와 `from_user.id`가 관리자와 일치하는지 명령·callback 모두 검사
-- callback payload는 신뢰하지 않고 DB의 현재 상태와 대조
-- stale onboarding 단계·만료 approval·이미 사용된 token은 거부
-- 사용자 메시지에 secret·approval token을 노출하지 않음
-- Telegram에 표시하는 예외·감사로그 문구는 credential, URL, 서버 절대경로, 장문 식별번호를 정제하고 길이를 제한
-- 전체 traceback과 원본 예외는 Telegram이 아니라 접근 통제된 Oracle 로그에서만 확인
+- 명령과 callback 모두 `chat.id`와 `from_user.id` 확인
+- callback payload만 믿지 않고 DB 현재상태 재검증
+- stale/만료/재사용 token 거부
+- Telegram에는 정제된 오류요약만 표시하고 traceback은 Oracle 로그에서 확인
 
-## 5. 위험증가 BUY 승인 불변식
+## 6. 최초 JH AUTO 시작승인
 
-BUY는 사람 승인 없는 자동 실행으로 확대하지 않습니다.
+첫 배포 또는 아직 시작하지 않은 상태에서는 `launch_authorized=0`, 현재 허용원금 0, startup quarantine ON, 실제 신규 BUY 차단을 유지합니다.
 
-기본 사용자 경로는:
+대표는 `/auto`에서 운용 기준자금과 자동운용비율을 설정하고 `/auto start`의 2단계 확인을 직접 수행합니다.
+
+**최종 start callback은 주문을 제출하지 않습니다.** callback 전후 열린 주문 수가 달라지면 안전격리합니다. 첫 BUY는 이후 별도의 scheduler 안전주기에서만 가능합니다.
+
+## 7. `$50,000` 연구 기준과 LIVE 자금 분리
+
+JDSS 3.2.2의 `$50,000`은 공식 연구·백테스트 회귀 기준입니다. LIVE에서는 JH AUTO 상태가 존재하면 이 값을 실거래 한도로 fallback하지 않습니다.
 
 ```text
-오늘 주문 한번에 검토
-  → preflight
-  → N건 순차 실행 최종 승인
+운용 기준자금
+× 자동운용비율
+= 목표 자동원금
+→ 50/75/100 단계
+= 현재 허용원금
+→ HWM75
+= 현재 위험예산
 ```
 
-내부적으로는 각 signal의 review/execution approval 경계를 유지합니다.
+최초 JH AUTO launch에서는 과거 V3.2.2 원장에 남아 있을 수 있는 legacy `$50,000` HWM/risk state를 그대로 이어받지 않습니다. launch preflight가 성공한 뒤 HWM 기준을 새 JH AUTO 1단계 현재 허용원금으로 재기준화합니다.
 
-- token은 암호학적 난수
-- DB에는 SHA-256 hash만 저장
-- 상수시간 비교
-- approval stage 확인
-- 짧은 TTL
-- 1회사용
-- 가격·수량·세션 변경 시 기존 approval 폐기
+운용 기준자금·자동운용비율 변경은 외부 자금흐름으로 처리하여 수익률을 왜곡하지 않습니다.
 
-## 6. 일괄 BUY preflight 안전장치
+## 8. 위험증가 BUY 최종 불변식
 
-batch approval을 만들기 전에 다음을 모두 증명해야 합니다.
+신규 BUY는 최종 주문예약 경계에서 최소 다음을 다시 확인합니다.
 
-1. 주문 허용 세션
-2. Toss 08:50~08:59 KST 점검시간이 아님
-3. 최신 완결 거래일의 production 계산 freshness
-4. 새 목표의 다음 거래일·target_qty 준비 상태
-5. 열린 위험축소 SELL 없음
-6. 중복 BUY 미체결 없음
-7. 즉시 reconciliation 성공
-8. SAFE_MODE 없음
-9. signal generation/version 유효
-10. **전체 BUY 합계**가 HWM75·JDSS 현금·브로커 주문가능금액을 넘지 않음
+- JH AUTO 설치·정상상태
+- 최초 시작승인 ON
+- startup/system quarantine OFF
+- 대표 긴급정지 latch OFF
+- AUTO state `RUNNING`
+- `operator_buy_halt=0`
+- SAFE_MODE 없음
+- 기준자금·자동운용비율·목표원금·현재 허용원금의 상호관계 정상
+- 현재 허용원금 > 0
+- HWM75 현재 위험예산 정상
+- 현재 보유 + committed open BUY + 이번 주문이 목표수량을 넘지 않음
+- managed cash / HWM75 / broker buying power 범위 안
+- 실제 broker POST 직전 미국 정규장 재확인
 
-active BUY signal이 없다는 이유만으로 `오늘 주문 없음`을 만들지 않습니다. target_qty와 보유수량을 대조해 계산지연·SELL 준비·BUY 생성대기·onboarding 단계대기와 진짜 주문없음을 구분합니다.
+하나라도 증명되지 않으면 fail-closed입니다.
 
-## 7. batch 동시성·중복방지
+## 9. 내부 2단계 검증과 자동실행
 
-- batch 생성부터 실행까지 process-level lock으로 직렬화
-- 이미 유효한 batch가 있으면 새 batch 생성 금지
-- batch가 생성되는 동안 일부 execution approval만 만들어지고 오류가 나면 모두 cleanup
-- 오래된 batch ID와 callback 재사용 금지
-- 서버 재시작 뒤 메모리 batch를 복원해 주문권한으로 사용하지 않음
-- DB 주문예약은 SQLite `BEGIN IMMEDIATE` 안에서 현금·위험예산·잔여 목표를 다시 검사
+과거 사람이 누르던 review → execution approval 코드를 삭제하거나 우회하지 않습니다. JH AUTO는 한 안전주기에서 활성 BUY signal → review approval → 최신 가격·수량 검증 → execution approval → 실행 직전 재검증 → OrderManager → Toss 순서로 내부 처리합니다.
 
-process lock은 사용자 편의용 1차 방어이고, **최종 안전경계는 DB transaction과 broker/order validation**입니다.
+정상 JH AUTO 운영에서 운영자에게 **개별 주문 최종승인을 요구하지 않습니다.** 사람이 직접 누르는 기존 승인 UI는 호환/비상 경로일 수 있으나 현재 기본 운영계약이 아닙니다.
 
-## 8. 최종 실행 직전 재검증
+## 10. 정규장과 주문속도 제한
 
-최종 버튼 직전에 다시 확인합니다.
+JH AUTO 자동 allocation 주문은 미국 정규장에만 허용합니다.
 
-- broker/DB reconciliation
-- SAFE_MODE
-- 새 열린 주문
-- 전체 매수가능한도
-- 각 종목 가격·수량·세션
-- execution approval 유효성
+- 한 깨끗한 안전주기 신규 BUY 최대 1건
+- 동시에 활성 BUY가 있으면 다음 신규 BUY 금지
+- 동일 signal/일일 자동시도 상한 적용
+- 실제 POST 직전 현재시각으로 세션 재검사
 
-검토와 실행 사이의 상태 차이를 자동으로 무시하지 않습니다.
+전략설정의 장전·장후 허용값은 기존 경로 호환정보이며 JH AUTO 자동 allocation 세션을 넓히지 않습니다.
 
-## 9. 순차 제출과 부분실행
+## 11. SELL-first
 
-일괄 BUY는 원자적 basket 주문이 아닙니다.
+목표 위험이 줄어들면 SELL을 BUY보다 먼저 처리합니다. SELL 주문상태 확정 → 체결 delta 원장반영 → broker/DB reconciliation이 정상이어야 다음 BUY가 가능합니다.
 
-- 각 종목은 독립 주문으로 제출
-- 앞 주문이 성공하고 뒤 주문이 실패할 수 있음
-- 가격변경, `UNKNOWN`, `REJECTED`, `CANCELED`, `REPLACED` 등 fail-closed 조건이 나오면 이후 BUY 중단
-- 남은 approval 취소
-- 이미 제출된 앞 주문을 자동 반대매매해 rollback하지 않음
-- 앞 주문은 실제 broker 상태로 계속 감시
+부분체결·미완료·`UNKNOWN`·취소확인 실패가 있으면 BUY를 차단합니다.
 
-사용자 화면에서도 `전체 실행`보다 **`N건 순차 실행`** 표현을 사용해 원자적 주문으로 오해하지 않게 합니다.
+## 12. 주문 멱등성과 write 재시도 금지
 
-## 10. 전략 자금 경계
-
-- HWM 위험예산은 현재 평가액보다 클 수 없음
-- 손실을 개인 현금으로 자동 보충하지 않음
-- 기존 allocation 원가와 열린 BUY 잔여 notional·수수료를 위험예산에서 예약
-- 아직 원장에 반영되지 않은 확정 체결도 잔여 목표 계산에 반영
-- 신규 BUY는 HWM75 위험예산, JDSS 현금, 브로커 주문가능금액, 종목 잔여 target 중 가장 제한적인 경계를 넘지 않음
-- batch 사전검사와 별개로 **각 실제 주문예약에서 다시 원자적으로 검사**
-
-## 11. SELL-first 안전장치
-
-위험축소 SELL은 BUY보다 먼저 처리합니다.
-
-- 목표 변경 전 기존 allocation 주문 상태 최신화
-- 필요한 SELL 제출
-- 종료 확인
-- 체결 원장 반영
-- reconciliation
-- 이후에만 BUY 허용
-
-SELL 부분체결·`UNKNOWN`·취소확인 실패·불완전 정산이 있으면 신규 BUY를 차단합니다.
-
-## 12. 주문 멱등성과 broker receipt 검증
-
-- 결정적 client order ID 사용
-- 동일 client order ID 재시도는 새 주문을 임의 생성하지 않음
-- broker 최신 receipt를 DB에 먼저 저장
-- client order ID, broker order ID, symbol, side, ordered qty, filled qty를 예약값과 대조
-- 불일치 receipt는 `UNKNOWN`
+- 결정적 `client_order_id`
+- DB transaction에서 주문예약
+- broker receipt의 client/broker ID, symbol, side, qty 검증
 - 누적 filled qty 감소 거부
-- 종료 주문의 비종료 상태 복귀 거부
-- 누적 체결수량과 누적 체결금액은 이전 적용값과의 delta만 원장 반영
-- `PENDING_CANCEL`, `PENDING_REPLACE` 포함 비종료 상태는 열린 주문으로 예약·감시
+- 종료주문의 비종료상태 회귀 거부
+- cumulative fill은 이전 적용분과의 delta만 원장반영
+- POST timeout/응답유실/결과불명은 `UNKNOWN`
+- **계좌를 바꾸는 POST/취소 요청은 결과가 애매하면 blind replay 금지**
 
-## 13. 재시작 안전성
+조회전용 GET의 명확한 일시오류만 제한적으로 재시도할 수 있습니다.
 
-- 시작 시 DB strategy generation·schema와 설정 호환성 확인
-- 증명 가능한 dry-run 체결·수수료로만 수량·현금 복원
-- 재시작 시 `UNKNOWN`과 `PARTIAL_FILLED`를 추정 성공처리하지 않음
-- broker order ID가 없거나 열린 주문을 현재 broker에서 찾을 수 없으면 SAFE_MODE
-- 같은 generation의 저장 target_qty와 현재 보유·열린 주문 차이만 BUY gap 복구 후보로 사용
+## 13. 미체결·부분체결
 
-## 14. SAFE_MODE
+신규 AUTO BUY가 체결대기 한도를 넘으면 취소 요청 후 원주문을 다시 확인합니다. 취소가 확실하면 실제 체결분을 반영한 뒤 다음 주기에 새 목표를 계산하고, 취소상태가 불명확하면 SAFE_MODE로 신규 BUY를 막습니다.
 
-대표 진입 조건:
+부분체결 잔량을 즉시 같은 주문으로 반복전송하지 않습니다.
 
-- 주문 결과 `UNKNOWN`
-- broker/DB 보유 불일치
-- 열린 주문 불일치
-- 위험축소 SELL 미완료
-- 복구 상태를 증명할 수 없음
-- 전략 generation/version 불일치
+## 14. 자금투입 50→75→100
 
-SAFE_MODE는 단 한 번의 정상 조회만으로 자동 해제하지 않습니다.
+최초 시작과 증액은 새 위험을 단계적으로 엽니다. 각 단계 승격에는 현재 목표충족, 미체결 0, reconciliation 정상, SAFE_MODE 없음, 최소 거래세션, **해당 단계에서 최소 1건 실제 AUTO 체결 증거**가 필요합니다.
 
-## 15. 실제 Toss와 dry-run 분리
+정수주 반올림 때문에 목표가 0주라는 이유만으로 다음 자금을 열지 않습니다. 감액은 단계대기 없이 위험축소에 반영합니다.
 
-- forced dry-run 주문·보유·미체결은 SQLite + 모의 broker 기준
-- `/account`와 `toss-smoke`는 실제 Toss를 read-only 조회
-- Toss read-only 결과를 dry-run 보유에 자동 채택하지 않음
-- dry-run 주문을 실주문으로 자동 변환하지 않음
-- 실제 계좌 조회 실패를 0주·정상으로 해석하지 않음
-- **실거래 운영 프로그램이 실행 중일 때 외부 health process는 `toss-smoke`로 별도 access token을 발급하지 않음**
-- 실거래 authenticated smoke가 필요하면 서비스 정지·기동과 직렬화된 배포 구간 또는 운영 프로그램 자체 조회경계에서 수행
+## 15. 대표 긴급정지와 시스템 임시격리
 
-같은 Toss 계좌에서 개인 QQQ/TQQQ/SOXL을 JDSS 관리물량과 혼합하지 않습니다. JDSS 주문과 Toss 앱의 동일티커 수동 주문도 동시에 수행하지 않는 것을 운영 원칙으로 합니다.
+### 대표 `/halt`
 
-## 16. Toss API·네트워크
+- 신규 BUY 즉시 차단
+- durable operator latch ON
+- 가능한 BUY 주문 취소 시도
+- 위험축소 SELL·주문감시·reconciliation은 계속
+- **시스템 자동해제 금지**
 
-- 공식 HTTPS base URL 고정
-- 연결·응답 timeout
-- 401 token refresh 재시도 횟수 제한
-- 동일 client credentials의 독립 프로세스 토큰 재발급은 기존 운영 토큰을 무효화할 수 있으므로 LIVE 중 독립 token issuer를 만들지 않음
-- GET 계열 read-only 요청은 내부 token refresh 후에도 `invalid-token`·`expired-token`이 남는 동시경합에 한해 짧고 제한적으로 다시 조회할 수 있음
-- 주문 생성·취소 등 쓰기 요청은 401이나 결과 불명 상태에서 자동 재제출하지 않음
-- 성공 응답도 JSON 구조·필수값·수치 범위·주문 상태 검증
-- 현재가 응답의 종목·가격·시각·시간대 검증
-- 응답 시각이 5분보다 오래되거나 2분 이상 미래면 주문 계산 차단
-- API 오류문자열을 shell 명령으로 사용하지 않음
-- 유지보수·장애를 주문성공 또는 미보유로 변환하지 않음
+`/resume`은 대표 긴급정지/SAFE_MODE 복구의 2단계 확인이며, 첫 JH AUTO 시작승인과 다릅니다. `/resume` 자체가 주문을 제출하는 버튼도 아닙니다.
 
-## 17. SSH·Oracle
+### 시스템 임시격리
 
-- `StrictHostKeyChecking=yes`
-- 신뢰된 경로로 확인한 Oracle public host key만 `known_hosts`에 고정
-- Actions에서 즉석 `ssh-keyscan` 결과를 자동 신뢰하지 않음
-- `accept-new` 사용 금지
-- host trust secret이 없으면 배포·runtime verifier 중단
-- 서비스는 최소권한·비루트·private tmp/device·`UMask=0077` 등 hardening 유지
-- DB·로그·cache만 승인된 shared write 경계 사용
+재시작·일시적인 안전상태 갱신 실패 등 시스템이 관리하는 BUY 차단입니다. 이미 launch authorization이 있고 clean reconciliation, 미체결 0, SAFE_MODE 없음이 증명되면 시스템이 정상상태로 복구할 수 있습니다.
 
-## 18. rollback-safe 배포
+## 16. SAFE_MODE
 
-- 최신 보호 `main`만 배포
-- release-local venv에서 미리 설치·검증
-- 서비스 정지 직후 SQLite `backup()` snapshot
-- release atomic switch
-- config/init-db/service/read-only smoke
-- 실패 시 previous release + unit + DB snapshot 자동 복원
-- rollback도 실패하면 신규 BUY 금지 및 수동 복구
-- config version 변경은 표준 deploy로 임의 처리하지 않고 별도 migration PR 필요
+대표 진입조건은 주문결과 `UNKNOWN`, broker/DB 보유 불일치, 열린 주문 불일치, 위험축소 SELL 미완료, 취소결과 미확정, strategy generation/version 불일치, 자동운용 상태 증명불가 등입니다.
 
-## 19. Security workflow
+SAFE_MODE는 단 한 번의 정상조회만으로 성공으로 추정하지 않습니다.
 
-- `pip-audit`: Python dependency 취약점
-- `bandit`: Python 일반 보안 패턴
-- CodeQL: code scanning
-- Gitleaks: 전체 Git history secret scan
-- Dependabot: Python·Actions 의존성 갱신
-- 사용하지 않는 runtime 의존성은 제거하고 `pyproject.toml`과 `requirements.txt`의 직접 의존성을 테스트로 동기화
-- Oracle과 CI 설치는 검토된 `requirements.lock` 전이 의존성 제약을 적용해 같은 commit의 설치 결과가 임의로 변하지 않게 함
-- coverage 하한: 안전경계 테스트가 조용히 사라지는 것 방지
+## 17. 프로세스·재시작 안전
 
-## 20. 실거래 오작동 방지 잠금
+- 같은 live SQLite에 두 runtime이 동시에 붙지 못하도록 OS 파일잠금
+- 프로세스 시작마다 startup quarantine
+- 미반영 체결 복구 후 reconciliation
+- UNKNOWN/open order 추정 성공처리 금지
+- 저장 목표수량과 broker-confirmed actual/committed order 차이만 새 BUY gap으로 사용
 
-현재 정확한 상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)를 확인합니다.
+## 18. 실제 Toss 계좌 운영원칙
 
-일반 설정 경로에서는 다음 잠금을 계속 유지합니다.
+- 실제 Toss 보유·미체결·buying power가 최종 외부 사실
+- 내부 원장과 계속 대조
+- QQQ/TQQQ/SOXL을 Toss 앱에서 JH AUTO와 동시에 수동매매하지 않음
+- 비관리 종목은 JH AUTO 자금/HWM에 자동 포함하지 않음
+- 계좌조회 실패를 0주/정상으로 해석하지 않음
 
-- `portfolio.live_enabled=false`
-- 일반 프로그램 경로의 실거래 차단
+## 19. Oracle 배포
 
-승인된 별도 실거래 준비 전환 경로에서는 다음을 추가로 요구합니다.
+LIVE-ARMED 배포는 main 필수검증 확인 → 배포 전 저수준 BUY halt ON → 기존 실거래 DB·환경 보존 → JH AUTO/주문/재시작 회귀테스트 → 서비스 교체 → startup quarantine → 계좌 read-only/reconciliation/Telegram smoke 순서로 진행합니다.
 
-- 별도 새 실거래 원장
-- 실거래 준비 완료 표시
-- 시작·재시작 시 신규 매수 잠금
-- 계좌·원장 대조
-- 신규 매수 2단계 승인
+배포 workflow는 `/auto start`, `/resume`, 기준자금·비율 변경을 수행하지 않습니다.
 
-최종 주문 경계인 `OrderManager`도 실거래 준비 완료 표시와 신규 매수 잠금 값을 재검증합니다. 잠금 값이 `0` 또는 `1`이 아니거나 누락되면 잠금 해제로 간주하지 않고 주문을 차단합니다.
+배포 직후의 저수준 BUY halt는 **대표 긴급정지와 동일한 의미가 아닙니다.**
 
-배포 성공, 조회 기능 확인, 문서 체크리스트 존재만으로 실거래 준비 완료라고 판단하지 않습니다.
+- 최초 시작승인 전이면 `launch_authorized=0`이므로 BUY는 계속 차단됩니다.
+- 이미 최초 시작승인이 완료된 runtime이면 fresh reconciliation, 미체결 0, SAFE_MODE 없음, 대표 `/halt` latch OFF가 모두 증명된 뒤 JH AUTO가 후속 독립 안전주기에서 **시스템 임시격리만** 자동해제할 수 있습니다.
+- 대표 `/halt` latch가 ON이면 배포·재시작 후에도 시스템이 자동해제하면 안 됩니다.
 
-실거래 준비 전환은 실제 계좌 사전점검·주문 연결부·회계·DB 이전·복구 연습과 별도 명시 승인을 요구합니다.
+따라서 배포 도구가 BUY를 직접 풀어주는 것이 아니라, 운영 프로그램의 fail-closed 재검증 결과에 따라 기존 승인상태가 안전하게 복구되는 구조입니다.
 
-## 21. 변경 전 체크리스트
+## 20. 보안/운영 변경 완료 기준
 
-- [ ] secret이나 계좌정보를 새로 노출하지 않는가
-- [ ] 관리자 private/chat/from_user 검증이 유지되는가
-- [ ] BUY approval TTL·1회성·stale 차단이 유지되는가
-- [ ] batch preflight가 계산 freshness·SELL·정합성·합계한도를 확인하는가
-- [ ] 동시 클릭·중복 batch가 차단되는가
-- [ ] 최종 클릭 직전 reconciliation과 한도 재검사가 있는가
-- [ ] 순차 제출 중 실패 시 이후 BUY가 중단되는가
-- [ ] 위험축소 SELL 미완료 뒤 BUY가 차단되는가
-- [ ] 주문 멱등성·부분체결 delta·receipt 검증이 유지되는가
-- [ ] dry-run과 Toss read-only가 분리되는가
-- [ ] SAFE_MODE를 쉽게 우회하지 않는가
-- [ ] SSH host key가 고정되어 있는가
-- [ ] DB snapshot과 rollback이 가능한가
-- [ ] live hard lock을 사용자 명시 승인 없이 약화하지 않는가
+자금/HWM, BUY/SELL/취소/OrderManager, Telegram 관리자 callback, startup/restart, reconciliation/SAFE_MODE, LIVE 배포 workflow 변경은 관련 회귀테스트와 전체 Quality/Security 검증을 요구합니다.
+
+실제 사고나 새 운영리스크를 발견하면 재현 fixture를 남겨 같은 문제가 회귀하지 않게 합니다.
