@@ -10,6 +10,7 @@ import pytest
 from jd_holdings.application.broker import DryRunBroker
 from jd_holdings.application.database import SQLiteRepository
 from jd_holdings.application.jh_auto_runtime_services import JHAutoLiveAllocationTradingService
+from jd_holdings.application.managed_account import current_v322_capital_state
 from jd_holdings.automation.final_ops_hardening import (
     AUTO_RAMP_STAGE_AUTO_FILL_KEY,
     FinalOpsProductionJHAutoService,
@@ -17,6 +18,8 @@ from jd_holdings.automation.final_ops_hardening import (
 from jd_holdings.automation.service import (
     AUTO_RAMP_STAGE_KEY,
     TARGET_QTY_GENERATION_KEY,
+    V322_HWM_KEY,
+    V322_RISK_BUDGET_KEY,
 )
 from jd_holdings.infrastructure.final_ops_runtime import (
     FinalOpsLiveInitialOnboardingPortfolioService,
@@ -80,6 +83,23 @@ def test_live_allocation_returns_without_writes_outside_regular_session():
     service.market_clock = SimpleNamespace(classify_session=lambda _now: "pre_market")
 
     assert service.run_allocation(datetime(2026, 9, 3, 12, 0, tzinfo=UTC)) is None
+
+
+def test_first_auto_launch_discards_legacy_50k_hwm_state(tmp_path, config):
+    repository, _broker, service = _service(tmp_path, config)
+    repository.set_system_value(V322_HWM_KEY, "50000")
+    repository.set_system_value(V322_RISK_BUDGET_KEY, "50000")
+    service.set_base_capital("50000")
+    service.set_ratio_percent("20")
+
+    settings = service.authorize_launch()
+
+    assert settings.target_principal == Decimal("10000.00")
+    assert settings.effective_principal == Decimal("5000.00")
+    assert current_v322_capital_state(config, repository) == (
+        Decimal("5000.00"),
+        Decimal("5000.00"),
+    )
 
 
 def test_every_ramp_stage_requires_auto_fill_proof(tmp_path, config):
@@ -154,3 +174,4 @@ def test_live_entrypoint_uses_final_ops_guards():
     assert "FinalOpsOrderMonitor" in source
     assert "FinalOpsLiveInitialOnboardingPortfolioService" in source
     assert "LiveRuntimeLock" in source
+    assert "LiveJHAutoTelegramBotApp" in source
