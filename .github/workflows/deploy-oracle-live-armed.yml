@@ -60,6 +60,7 @@ jobs:
           python -m pytest \
             tests/test_jh_auto.py \
             tests/test_jh_auto_prelive_hardening.py \
+            tests/test_jh_auto_final_ops_hardening.py \
             tests/test_live_entrypoints.py \
             tests/test_live_runtime_update_contract.py \
             tests/test_live_deployment_contract.py \
