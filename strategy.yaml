@@ -3,6 +3,8 @@ config_version: "3.2.2"
 
 portfolio:
   enabled: true
+  # JDSS 3.2.2 공식 연구·회귀검증의 기준 예시자금입니다.
+  # 실거래 총 투자금액은 JH AUTO에서 운영자가 별도로 정하며 LIVE에서 이 값으로 fallback하지 않습니다.
   total_capital: 50000
   live_enabled: false
   # Legacy parser fields retained for backward-compatible component tests.
@@ -71,6 +73,8 @@ market_regime:
     rule: any_benchmark_below_ema60
     missing_data_policy: warn_and_allow
   v322_allocation:
+    # JDSS 3.2.2 canonical backtest/reference capital. 실제 운용원금이 아닙니다.
+    # LIVE HWM75의 시작원금은 JH AUTO의 운영자 지정 현재 허용원금을 사용합니다.
     initial_capital: 50000
     hwm_reinvestment_fraction: 0.75
     sma_short: 50
