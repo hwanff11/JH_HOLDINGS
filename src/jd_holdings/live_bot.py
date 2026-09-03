@@ -13,14 +13,18 @@ from jd_holdings.application.order_manager import OrderManager
 from jd_holdings.application.position_manager import PositionManager
 from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
-from jd_holdings.automation.final_ops_hardening import FinalOpsProductionJHAutoService
+from jd_holdings.automation.final_ops_hardening import (
+    FinalOpsProductionJHAutoService as ProductionJHAutoService,
+)
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
 from jd_holdings.infrastructure.final_ops_runtime import (
-    FinalOpsLiveInitialOnboardingPortfolioService,
-    FinalOpsOrderMonitor,
-    LiveRuntimeLock,
+    FinalOpsLiveInitialOnboardingPortfolioService as HardenedLiveInitialOnboardingPortfolioService,
 )
+from jd_holdings.infrastructure.final_ops_runtime import (
+    FinalOpsOrderMonitor as OrderMonitor,
+)
+from jd_holdings.infrastructure.final_ops_runtime import LiveRuntimeLock
 from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
@@ -41,7 +45,7 @@ def _run_locked_live(settings) -> None:
     # Install AUTO schema/state before arming the low-level BUY barrier. Bootstrap is
     # deliberately fail-closed: launch_authorized=0, effective principal=0 and
     # startup_quarantine=1 on the first deployment. Deployment alone can never buy.
-    FinalOpsProductionJHAutoService.bootstrap_repository(repository)
+    ProductionJHAutoService.bootstrap_repository(repository)
     mark_repository_as_jh_auto_live(repository)
 
     # Every process start closes BUY first. JH AUTO may reopen only after a later
@@ -71,7 +75,7 @@ def _run_locked_live(settings) -> None:
         market_clock,
         None,
     )
-    order_monitor = FinalOpsOrderMonitor(
+    order_monitor = OrderMonitor(
         config,
         repository,
         broker,
@@ -80,7 +84,7 @@ def _run_locked_live(settings) -> None:
         tp_manager,
         market_clock,
     )
-    portfolio_service = FinalOpsLiveInitialOnboardingPortfolioService(
+    portfolio_service = HardenedLiveInitialOnboardingPortfolioService(
         config,
         repository,
         broker,
@@ -90,7 +94,7 @@ def _run_locked_live(settings) -> None:
         trading_mode=settings.trading_mode,
     )
     reconciliation_service = ReconciliationService(config, repository, broker)
-    auto_service = FinalOpsProductionJHAutoService(
+    auto_service = ProductionJHAutoService(
         config,
         repository,
         broker,
