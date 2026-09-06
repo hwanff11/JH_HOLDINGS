@@ -82,7 +82,7 @@ def test_prelaunch_daily_brief_hides_legacy_capital_and_manual_approval_language
 
     rendered = app._normalize_inherited_auto_text(text)
 
-    assert "[JH AUTO 아침 브리핑]" in rendered
+    assert "[JH AUTO 전일 마감 브리핑]" in rendered
     assert "자동매수 후보가 있습니다" in rendered
     assert "개별 BUY 승인은 필요하지 않으며" in rendered
     assert "자동운용자산 : <b>시작 전</b>" in rendered
