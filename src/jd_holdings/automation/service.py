@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from functools import wraps
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from . import AUTO_VERSION
 
 AUTO_ENABLED_KEY = "jh_auto_enabled"
 AUTO_VERSION_KEY = "jh_auto_version"
+AUTO_CONFIG_REVISION_KEY = "jh_auto_config_revision"
 AUTO_BASE_CAPITAL_KEY = "jh_auto_base_capital"
 AUTO_RATIO_KEY = "jh_auto_ratio"
 AUTO_TARGET_PRINCIPAL_KEY = "jh_auto_target_principal"
@@ -60,6 +62,15 @@ MAX_BASE_CAPITAL = Decimal("10000000")
 MIN_RATIO = Decimal("0.01")
 MAX_RATIO = Decimal("1.00")
 AUTO_RETRY_COOLDOWN = timedelta(minutes=5)
+
+
+def atomic_auto_change(method):
+    """Serialize operator/ramp changes with BUY and persist the whole transition."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with BUY_EXECUTION_LOCK, self.repository.transaction():
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -298,6 +309,17 @@ class JHAutoService:
     def set_ratio_percent(self, value: Decimal | str | int | float) -> AutoSettings:
         return self._set_operator_config(base=None, ratio=self._normalize_ratio_percent(value))
 
+    def confirmation_state(self) -> tuple:
+        settings = self.settings()
+        return (
+            self.repository.get_system_value(AUTO_CONFIG_REVISION_KEY) or "0",
+            settings.base_capital, settings.ratio, settings.target_principal,
+            settings.effective_principal, settings.launch_authorized,
+            settings.ramp_stage, settings.ramp_target_principal,
+            settings.operator_halt_latched,
+        )
+
+    @atomic_auto_change
     def _set_operator_config(
         self,
         *,
@@ -318,6 +340,8 @@ class JHAutoService:
         if new_ratio is not None:
             self.repository.set_system_value(AUTO_RATIO_KEY, str(new_ratio))
         self.repository.set_system_value(AUTO_TARGET_PRINCIPAL_KEY, str(new_target))
+        revision = int(self.repository.get_system_value(AUTO_CONFIG_REVISION_KEY) or "0")
+        self.repository.set_system_value(AUTO_CONFIG_REVISION_KEY, str(revision + 1))
 
         if before.launch_authorized:
             self._retarget_live_principal(before, new_target)
@@ -408,11 +432,16 @@ class JHAutoService:
         if self._portfolio_safe_mode():
             raise RuntimeError("안전정지(SAFE_MODE)가 남아 있어 자동운용을 시작할 수 없습니다")
 
+    @atomic_auto_change
     def authorize_launch(self) -> AutoSettings:
         """Persist operator consent only; this method never places an order."""
         self._preflight_launch()
         before = self.settings()
         if before.launch_authorized:
+            if before.effective_principal <= 0 or self._decimal(AUTO_UNITS_KEY) <= 0:
+                raise RuntimeError(
+                    "기존 시작승인 회계가 불완전합니다. 매수 차단을 유지하고 원장을 점검하세요"
+                )
             return before
         now = datetime.now(UTC).isoformat()
         self.repository.set_system_value(AUTO_ACCOUNTING_STARTED_AT_KEY, now)
@@ -641,9 +670,17 @@ class JHAutoService:
             return False
         return all(int(row["qty"]) >= int(row["target_qty"]) for row in cores.values())
 
+    @atomic_auto_change
     def advance_ramp_if_ready(self) -> bool:
         settings = self.settings()
         if not settings.launch_authorized or settings.ramp_stage == 0:
+            return False
+        if (
+            settings.operator_halt_latched
+            or settings.quarantine
+            or settings.state != "RUNNING"
+            or self.repository.get_system_value(OPERATOR_BUY_HALT_KEY) != "0"
+        ):
             return False
         if self._portfolio_safe_mode() or self.repository.open_orders():
             return False

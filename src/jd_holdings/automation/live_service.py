@@ -6,6 +6,7 @@ from .service import (
     V322_HWM_KEY,
     V322_RISK_BUDGET_KEY,
     JHAutoService,
+    atomic_auto_change,
 )
 
 
@@ -19,6 +20,7 @@ class ProductionJHAutoService(JHAutoService):
     changes preserve HWM through the normal unitized flow accounting.
     """
 
+    @atomic_auto_change
     def _apply_external_flow(
         self,
         new_effective: Decimal,

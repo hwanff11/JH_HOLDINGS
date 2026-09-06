@@ -102,11 +102,13 @@ jobs:
             exit 1
           fi
 
-          "$current/.venv/bin/python" - "$db_path" "${JDSS_TRADING_MODE}" <<'PY'
+          "$current/.venv/bin/python" - "$db_path" "${JDSS_TRADING_MODE}" "$current" <<'PY'
           import sqlite3
           import sys
+          from datetime import UTC, datetime
+          from pathlib import Path
 
-          path, mode = sys.argv[1:]
+          path, mode, release = sys.argv[1:]
           connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
           try:
               result = connection.execute("PRAGMA quick_check").fetchone()
@@ -115,7 +117,8 @@ jobs:
               if mode == "live":
                   values = dict(connection.execute(
                       "SELECT key, value FROM system_state "
-                      "WHERE key IN ('live_commissioned','operator_buy_halt')"
+                      "WHERE key IN ('live_commissioned','operator_buy_halt',"
+                      "'jh_auto_watchdog_version','jh_auto_scheduler_heartbeat')"
                   ).fetchall())
                   if values.get("live_commissioned") != "1":
                       raise SystemExit("live ledger is not commissioned")
@@ -123,6 +126,23 @@ jobs:
                   if halt not in {"0", "1"}:
                       raise SystemExit(f"invalid operator BUY halt state: {halt}")
                   print(f"LIVE_COMMISSIONED=PASS BUY_HALT={halt}")
+                  source = Path(release) / "src/jd_holdings/infrastructure/jh_auto_telegram.py"
+                  supported = source.is_file() and "jh_auto_watchdog_version" in source.read_text()
+                  if supported:
+                      if values.get("jh_auto_watchdog_version") != "1":
+                          raise SystemExit("scheduler watchdog did not initialize")
+                      raw = values.get("jh_auto_scheduler_heartbeat")
+                      if not raw:
+                          raise SystemExit("scheduler heartbeat is missing")
+                      stamp = datetime.fromisoformat(raw)
+                      if stamp.tzinfo is None:
+                          raise SystemExit("scheduler heartbeat timezone is missing")
+                      age = (datetime.now(UTC) - stamp).total_seconds()
+                      if not -120 <= age <= 300:
+                          raise SystemExit("scheduler heartbeat is stale")
+                      print("SCHEDULER_HEARTBEAT=PASS")
+                  else:
+                      print("SCHEDULER_HEARTBEAT=UNAVAILABLE legacy runtime")
           finally:
               connection.close()
           print("SQLITE_QUICK_CHECK=PASS")
