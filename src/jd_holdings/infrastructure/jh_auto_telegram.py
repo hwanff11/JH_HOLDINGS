@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from zoneinfo import ZoneInfo
 
 import telebot
@@ -31,7 +31,7 @@ ORDER_STATUS_LABELS = {
     "PENDING_CANCEL": "취소 확인 중", "CANCELED": "취소완료", "REJECTED": "주문거부",
     "REPLACED": "정정완료", "UNKNOWN": "결과 확인 필요", "ERROR": "검토·실행 오류",
 }
-SESSION_LABELS = {"regular": "정규장", "pre_market": "장전", "after_market": "장후", "closed": "휴장·장 마감"}
+SESSION_LABELS = {"regular": "정규장", "pre_market": "장전", "after_hours": "장후", "closed": "휴장·장 마감"}
 
 
 def _order_status_label(status: str) -> str:
@@ -543,7 +543,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         if kind == "capital":
             proposed = self.auto_service._normalize_money(value)
             ratio = settings.ratio or Decimal("0")
-            new_target = proposed * ratio
+            new_target = self.auto_service._target_principal(proposed, ratio)
             title = "운용 기준자금 변경"
             detail = (
                 f"현재 <code>{_money(settings.base_capital or 0)}</code> → "
@@ -553,7 +553,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         elif kind == "ratio":
             proposed_ratio = self.auto_service._normalize_ratio_percent(value)
             base = settings.base_capital or Decimal("0")
-            new_target = base * proposed_ratio
+            new_target = self.auto_service._target_principal(base, proposed_ratio)
             title = "자동운용비율 변경"
             detail = (
                 f"현재 <code>{settings.ratio_percent or 0:.2f}%</code> → "
@@ -566,11 +566,14 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             if settings.launch_authorized:
                 raise RuntimeError("JH AUTO 최초 시작승인이 이미 완료되어 있습니다")
             title = "JH AUTO 최초 자동운용 시작"
+            first_principal = (settings.target_principal * Decimal("0.5")).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
+            )
             detail = (
                 f"운용 기준자금 <code>{_money(settings.base_capital or 0)}</code>\n"
                 f"자동운용비율 <code>{settings.ratio_percent or 0:.2f}%</code>\n"
                 f"목표 자동원금 <code>{_money(settings.target_principal)}</code>\n\n"
-                f"첫 단계 허용원금(50%) <code>{_money(settings.target_principal * Decimal('0.5'))}</code>\n\n"
+                f"첫 단계 허용원금(50%) <code>{_money(first_principal)}</code>\n\n"
                 "승인 후에는 개별 매수승인 없이 JH AUTO가 실제 Toss 주문을 실행할 수 있습니다.\n"
                 "단, <b>이 확인 버튼 자체는 주문을 보내지 않습니다.</b> 다음 독립 안전주기에서 모든 조건을 다시 검사합니다."
             )

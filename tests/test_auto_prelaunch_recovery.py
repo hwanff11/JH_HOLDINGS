@@ -134,6 +134,17 @@ def test_same_confirmation_is_consumed_once_across_threads(tmp_path, config):
     assert broker.orders == {}
 
 
+def test_start_review_uses_same_cent_rounding_as_authorized_principal(tmp_path, config):
+    repo, _broker, service = configured(tmp_path, config)
+    service.set_base_capital("103")
+    service.set_ratio_percent("1")
+    app = app_for(repo, service)
+    review, _markup = app._review_change("start", "1")
+    assert "첫 단계 허용원금(50%) <code>$0.51</code>" in review
+    app._confirm_pending(next(reversed(app._auto_pending)))
+    assert service.settings().effective_principal == Decimal("0.51")
+
+
 @pytest.mark.parametrize(
     "key", ["jh_auto_operator_halt_latched", "operator_buy_halt", "jh_auto_startup_quarantine"]
 )
