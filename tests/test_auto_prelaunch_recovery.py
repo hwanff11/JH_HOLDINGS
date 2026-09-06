@@ -183,6 +183,8 @@ def test_delivery_failure_does_not_kill_scheduler_or_repeat_order(tmp_path, conf
     monkeypatch.setattr(TelegramBotApp, "_send", fail_delivery)
 
     def controlled_scheduler(self):
+        assert repo.get_system_value("jh_auto_scheduler_heartbeat")
+        assert repo.get_system_value("jh_auto_watchdog_version") == "1"
         self._record_scheduler_heartbeat()
         assert self._run_order_safety_cycle() is False
         self._stop.set()

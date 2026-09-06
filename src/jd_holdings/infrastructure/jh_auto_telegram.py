@@ -423,7 +423,9 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
 
     def _scheduler_loop(self) -> None:
         self._scheduler_thread_id = threading.get_ident()
-        self.repository.set_system_value("jh_auto_watchdog_version", "1")
+        with self.repository.transaction():
+            self._record_scheduler_heartbeat()
+            self.repository.set_system_value("jh_auto_watchdog_version", "1")
         while not self._stop.is_set():
             try:
                 super()._scheduler_loop()
