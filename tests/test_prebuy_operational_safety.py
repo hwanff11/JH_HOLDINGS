@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import threading
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -30,6 +31,8 @@ from jd_holdings.automation.service import (
 )
 from jd_holdings.infrastructure.jh_auto_live_display import LiveJHAutoTelegramBotApp
 from jd_holdings.infrastructure.jh_auto_telegram import JHAutoTelegramBotApp
+
+SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
 
 class _CleanReconciliation:
@@ -92,6 +95,21 @@ def test_first_launch_is_one_transaction_and_rolls_back_on_failure(tmp_path, con
     assert repository.get_system_value(AUTO_RAMP_STAGE_KEY) == "0"
 
 
+def test_first_launch_commits_authorization_and_stage_one_together(tmp_path, config):
+    repository, _broker, service = _service(tmp_path, config)
+    _configure(service)
+
+    settings = service.authorize_launch()
+
+    assert settings.launch_authorized
+    assert settings.target_principal == Decimal("10000.00")
+    assert settings.effective_principal == Decimal("5000.00")
+    assert settings.ramp_stage == 1
+    assert settings.quarantine
+    assert repository.get_system_value(OPERATOR_BUY_HALT_KEY) == "1"
+    assert repository.get_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY) == "0"
+
+
 def test_bootstrap_repairs_legacy_half_launch_fail_closed(tmp_path, config):
     repository, _broker, service = _service(tmp_path, config)
     _configure(service)
@@ -100,7 +118,6 @@ def test_bootstrap_repairs_legacy_half_launch_fail_closed(tmp_path, config):
     repository.set_system_value(AUTO_QUARANTINE_KEY, "1")
     repository.set_system_value(AUTO_STATE_KEY, "STARTUP_QUARANTINE")
 
-    # Re-instantiation runs the production bootstrap/recovery path.
     repaired = FinalOpsProductionJHAutoService(
         config,
         repository,
@@ -190,7 +207,6 @@ def test_scheduler_telegram_failure_is_nonfatal(monkeypatch):
 
     monkeypatch.setattr(JHAutoTelegramBotApp, "_send", _raise_send)
 
-    # Delivery failure must be isolated from the scheduler/order-monitoring thread.
     app._send("order already submitted")
     assert events
     assert events[0][0][1] == "JH_AUTO_SCHEDULER_TELEGRAM_SEND_FAILED"
@@ -214,9 +230,17 @@ def test_late_daily_brief_is_suppressed_without_suppressing_background_analysis(
 def test_daily_brief_display_window_is_one_hour_from_configured_time():
     app = object.__new__(LiveJHAutoTelegramBotApp)
     app.config = SimpleNamespace(
-        scheduler=SimpleNamespace(daily_analysis_time_kst=datetime.strptime("07:00", "%H:%M").time())
+        scheduler=SimpleNamespace(
+            daily_analysis_time_kst=datetime.strptime("07:00", "%H:%M").time()
+        )
     )
 
     assert app._daily_brief_display_window_open(
-        datetime(2026, 9, 6, 7, 30, tzinfo=SimpleNamespace())
-    ) is False
+        datetime(2026, 9, 6, 7, 30, tzinfo=SEOUL_TZ)
+    )
+    assert not app._daily_brief_display_window_open(
+        datetime(2026, 9, 6, 8, 0, tzinfo=SEOUL_TZ)
+    )
+    assert not app._daily_brief_display_window_open(
+        datetime(2026, 9, 6, 22, 31, tzinfo=SEOUL_TZ)
+    )
