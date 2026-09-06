@@ -59,6 +59,9 @@ jobs:
           python -m ruff check .
           python -m pytest \
             tests/test_jh_auto.py \
+            tests/test_auto_prelaunch_recovery.py \
+            tests/test_auto_scheduler_health.py \
+            tests/test_live_db_compatibility_gate.py \
             tests/test_jh_auto_prelive_hardening.py \
             tests/test_jh_auto_final_ops_hardening.py \
             tests/test_live_entrypoints.py \
