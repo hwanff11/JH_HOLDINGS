@@ -44,3 +44,9 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# This file contains complete Telegram HTML message lines by design, matching
+# telegram_bot.py. Import ordering is kept stable while the LIVE display module
+# is being consolidated after the first-production safety hardening.
+"src/jd_holdings/infrastructure/jh_auto_live_display.py" = ["E501", "I001"]
