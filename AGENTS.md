@@ -89,6 +89,8 @@ LIVE-ARMED 배포는 다음 계약을 지킵니다.
 - 배포 성공 후에도 `/resume` 자동실행 금지
 - 배포 성공 후에도 `/auto start` 자동실행 금지
 
+상세 배포 절차는 `docs/infra/DEPLOYMENT.md`, 보안·실거래 안전기준은 `docs/infra/SECURITY.md`를 기준으로 합니다.
+
 ## 7. 운영자 승인 역할
 
 운영자가 직접 승인하는 것은 다음입니다.
@@ -102,16 +104,17 @@ LIVE-ARMED 배포는 다음 계약을 지킵니다.
 
 확인 버튼은 검토 당시 자금·비율·운용상태에 묶여야 하며, 그 상태가 바뀌면 오래된 버튼은 무효입니다.
 
-## 8. 변경 유형별 필수 검증
+## 8. 변경 영향별 필수 동기화
 
-| 변경 | 반드시 확인할 것 |
-|---|---|
-| 전략 조건·비중·지표 | 설정 검증, no-lookahead 백테스트, OOS/비용, 전략 문서 |
-| 주문·승인·DB | 멱등성, 부분체결, UNKNOWN, 재시작, 계좌대조, 안전정지 |
-| 최초 시작·자금 | 단일 트랜잭션, stale 확인버튼, 증액/감액, 재시작 |
-| Telegram | 관리자 인증, 버튼 TTL/stale, 4096자, 전송장애가 scheduler를 죽이지 않는지 |
-| Toss API | read retry와 write no-blind-retry 경계 |
-| 배포 | BUY halt, pinned host, DB 보존, rollback 경계, smoke |
+| 변경 | 함께 확인·갱신할 기준 | 반드시 확인할 것 |
+|---|---|---|
+| 전략 조건·비중·지표 | `strategy.yaml`, `JDSS_FINAL_SPEC.md` | 설정 검증, no-lookahead 백테스트, OOS/비용 |
+| 자동운용 계약·자금·시작 | `JH_AUTO_SPEC.md`, `SECURITY.md` | 단일 트랜잭션, stale 확인버튼, 증액/감액, 재시작 |
+| 주문·승인·DB | `TELEGRAM_BOT_GUIDE.md`, `SECURITY.md` | 멱등성, 부분체결, UNKNOWN, 재시작, 계좌대조, 안전정지 |
+| Telegram | `TELEGRAM_BOT_GUIDE.md` | 관리자 인증, 버튼 TTL/stale, 4096자, 전송장애가 scheduler를 죽이지 않는지 |
+| Toss API | `SECURITY.md` | read retry와 write no-blind-retry 경계 |
+| 배포 | `DEPLOYMENT.md`, `SECURITY.md` | BUY halt, pinned host, DB 보존, rollback 경계, smoke |
+| 현재 운영상태 | `CURRENT_WORK.md` | GitHub main, Oracle runtime, BUY 잠금, 남은 작업 |
 
 ## 9. 문서 관리
 
