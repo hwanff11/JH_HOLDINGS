@@ -228,12 +228,25 @@ if previous_without_sessions != candidate_without_sessions:
     raise SystemExit("주문 세션 외 strategy.yaml 변경은 실거래 정기 배포에서 금지됩니다")
 print("LIVE_STRATEGY_CONTRACT=PASS regular_session_enabled=1")
 PY
-cmp -s \
+# PR #334의 연결/트랜잭션 변경만 검증된 원본 쌍으로 허용합니다.
+# 스키마·초기화·마이그레이션 코드는 동일하며 임의 DB 변경은 계속 차단합니다.
+"$release_dir/.venv/bin/python" - \
   "$previous_current/src/jd_holdings/application/database.py" \
-  "$release_dir/src/jd_holdings/application/database.py" || {
-  echo "실거래 정기 배포에서 DB 스키마 코드 변경은 금지됩니다." >&2
-  exit 1
-}
+  "$release_dir/src/jd_holdings/application/database.py" <<'PY_DB_CONTRACT'
+import hashlib
+import sys
+from pathlib import Path
+
+previous, candidate = [Path(path).read_bytes() for path in sys.argv[1:]]
+approved_transaction_update = (
+    "79153b89b76534b35d822a05b3b3d34bc4a39669db5dfa82a384913fc915e3e6",
+    "0fcde49903d0febd5fb3b9b0603efe79ff9e7a9d3c981208b2bd9ecf5ca4907c",
+)
+actual = (hashlib.sha256(previous).hexdigest(), hashlib.sha256(candidate).hexdigest())
+if previous != candidate and actual != approved_transaction_update:
+    raise SystemExit("실거래 정기 배포에서 미검증 DB 스키마 코드 변경은 금지됩니다.")
+print("LIVE_DB_COMPATIBILITY=PASS")
+PY_DB_CONTRACT
 
 # 정기 실거래 배포는 전략 세대를 자동 변경하지 않습니다.
 "$remote_python" - "$previous_current/strategy.yaml" "$release_dir/strategy.yaml" <<'PY'
