@@ -6,11 +6,14 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from jd_holdings.application.operational_safety import BUY_EXECUTION_LOCK
 from jd_holdings.automation import AUTO_VERSION
 from jd_holdings.automation.service import (
     AUTO_UNITS_KEY,
@@ -22,6 +25,29 @@ from . import telegram_bot as telegram_bot_module
 from .live_runtime_hardening import HardenedOperationalSafetyTelegramBotApp
 
 AUTO_CONFIRM_TTL_SECONDS = 300
+ORDER_STATUS_LABELS = {
+    "REVIEWING": "주문 검토 중", "SUBMITTED": "접수·체결대기", "CREATED": "주문 준비",
+    "PENDING": "체결대기", "PARTIAL_FILLED": "부분체결", "FILLED": "체결완료",
+    "PENDING_CANCEL": "취소 확인 중", "CANCELED": "취소완료", "REJECTED": "주문거부",
+    "REPLACED": "정정완료", "UNKNOWN": "결과 확인 필요", "ERROR": "검토·실행 오류",
+}
+SESSION_LABELS = {"regular": "정규장", "pre_market": "장전", "after_market": "장후", "closed": "휴장·장 마감"}
+
+
+def _order_status_label(status: str) -> str:
+    return ORDER_STATUS_LABELS.get(status, "상태 확인 필요")
+
+
+def _display_time(raw: str | None) -> str:
+    if not raw:
+        return "기록 없음"
+    try:
+        stamp = datetime.fromisoformat(raw)
+        if stamp.tzinfo is None:
+            return "기록 확인 필요"
+        return stamp.astimezone(ZoneInfo("Asia/Seoul")).strftime("%m/%d %H:%M:%S KST")
+    except (TypeError, ValueError):
+        return "기록 확인 필요"
 
 
 @dataclass(frozen=True)
@@ -29,6 +55,7 @@ class _PendingAutoChange:
     kind: str
     value: str
     created_monotonic: float
+    settings_state: tuple
 
 
 def _auto_bot_commands() -> list[telebot.types.BotCommand]:
@@ -91,8 +118,42 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         if settings.quarantine:
             return "🛡️ 자동점검·임시격리"
         if settings.state == "RUNNING":
+            if self.repository.get_system_value("operator_buy_halt") != "0":
+                return "🛡️ 신규매수 차단"
+            if self.market_clock.classify_session() != "regular":
+                return "🕒 장 마감·정규장 대기"
             return "✅ 자동운전 정상"
         return html.escape(settings.state)
+
+    def _operator_action(self) -> str:
+        settings = self.auto_service.settings()
+        if settings.operator_halt_latched:
+            return "정지 사유를 확인하세요. 재개는 /resume에서 직접 확인합니다."
+        if self._portfolio_safe_mode():
+            return "/errors · /order · /account에서 원인과 실제 주문상태를 확인하세요."
+        if not settings.configured:
+            return "/auto에서 운용 기준자금과 자동운용비율을 설정하세요."
+        if not settings.launch_authorized:
+            return "/account로 자금을 확인하고, 준비되면 /auto start에서 시작을 검토하세요."
+        if settings.quarantine or self.repository.get_system_value("operator_buy_halt") != "0":
+            return "새 매수는 차단 중입니다. 점검이 계속되면 /errors를 확인하세요."
+        return "별도 승인 작업은 없습니다. 시스템이 안전조건을 확인하며 운용합니다."
+
+    def _performance_text(self, value: str) -> str:
+        return value if self.auto_service.settings().launch_authorized else "운용 시작 전"
+
+    def _ramp_progress(self) -> str:
+        settings = self.auto_service.settings()
+        if not settings.launch_authorized:
+            return "첫 시작 후 50% → 75% → 100% 순서로 투입합니다."
+        if not settings.ramp_stage:
+            return "자금투입 완료"
+        if settings.operator_halt_latched or settings.quarantine:
+            return "자금확대 정지 중 · 현재 단계 유지"
+        filled = self.repository.get_system_value("jh_auto_ramp_stage_filled_trade_date")
+        if filled:
+            return f"목표 충족 기준일 {html.escape(filled)} · 최소 3거래세션 및 안전조건 확인 후 확대"
+        return "현재 단계의 실제 자동체결과 목표수량 충족 확인 대기"
 
     def _display_snapshot(self) -> dict[str, object]:
         if self.portfolio_service is None:
@@ -153,6 +214,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 "🌟 <b>[JH_HOLDINGS 자동운용 대시보드]</b>",
                 "",
                 f"• <b>현재 상태</b> : {self._auto_state_label()}",
+                f"• <b>지금 할 일</b> : {self._operator_action()}",
                 "• <b>투자전략</b> : <code>JDSS 3.2.2</code>",
                 f"• <b>자동매매</b> : <code>JH AUTO {AUTO_VERSION}</code>",
                 "",
@@ -163,13 +225,13 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"• 현재 허용원금 : <code>{_money(settings.effective_principal)}</code>",
                 f"• 자금축소 회수대기 : <code>{_money(perf['pending_reduction'])}</code>",
                 f"• 자금투입 단계 : <code>{ramp}</code>",
+                f"• 다음 단계 : {self._ramp_progress()}",
                 "",
                 "📈 <b>현재 성과</b>",
                 f"• 자동운용자산 : <code>{_money(perf['equity'])}</code>",
-                f"• 누적 운용손익 : <code>{_signed_money(perf['profit'])}</code>",
-                f"• 누적 운용수익률 : <code>{_percent(perf['return'])}</code>",
+                f"• 누적 운용손익 : <code>{self._performance_text(_signed_money(perf['profit']))}</code>",
+                f"• 누적 운용수익률 : <code>{self._performance_text(_percent(perf['return']))}</code>",
                 f"• 투자중 : <code>{_money(perf['invested'])}</code> · 현금 <code>{_money(perf['cash'])}</code>",
-                f"• 자금축소 회수대기 : <code>{_money(perf['pending_reduction'])}</code>",
                 f"• 최고 평가액 : <code>{_money(perf['high_water'])}</code>",
                 f"• HWM75 위험한도 : <code>{_money(perf['risk_budget'])}</code>",
                 "",
@@ -178,6 +240,8 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"• 대표 긴급정지 : <b>{'ON' if settings.operator_halt_latched else 'OFF'}</b>",
                 f"• 시스템 임시격리 : <b>{'ON' if settings.quarantine else 'OFF'}</b>",
                 f"• 진행 중 주문 : <code>{pending}건</code>",
+                f"• 최근 계좌·원장 대조 : {_display_time(self.repository.get_system_value('jh_auto_last_safety_success_at'))}",
+                f"• 최근 알림 전송실패 : {_display_time(self.repository.get_system_value('jh_auto_notification_failed_at'))}",
                 "",
                 "ℹ️ 자동운용 설정과 최초 시작은 <code>/auto</code>에서 관리합니다.",
             ]
@@ -192,8 +256,8 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             "",
             "📈 <b>전체 성과</b>",
             f"• 자동운용자산 : <code>{_money(perf['equity'])}</code>",
-            f"• 누적 운용손익 : <code>{_signed_money(perf['profit'])}</code>",
-            f"• 누적 운용수익률 : <code>{_percent(perf['return'])}</code>",
+            f"• 누적 운용손익 : <code>{self._performance_text(_signed_money(perf['profit']))}</code>",
+            f"• 누적 운용수익률 : <code>{self._performance_text(_percent(perf['return']))}</code>",
             f"• 현재 투자액 : <code>{_money(perf['invested'])}</code>",
             "",
             "📦 <b>종목별 보유·목표·보유수익률</b>",
@@ -238,9 +302,10 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             "🧾 <b>[오늘 자동운용]</b>",
             "",
             f"• <b>상태</b> : {self._auto_state_label()}",
-            f"• <b>현재 미국장</b> : <code>{html.escape(session)}</code>",
-            f"• <b>전체 누적수익률</b> : <code>{_percent(perf['return'])}</code>",
-            f"• <b>전체 누적손익</b> : <code>{_signed_money(perf['profit'])}</code>",
+            f"• <b>지금 할 일</b> : {self._operator_action()}",
+            f"• <b>현재 미국장</b> : <code>{SESSION_LABELS.get(session, '장 상태 확인 필요')}</code>",
+            f"• <b>전체 누적수익률</b> : <code>{self._performance_text(_percent(perf['return']))}</code>",
+            f"• <b>전체 누적손익</b> : <code>{self._performance_text(_signed_money(perf['profit']))}</code>",
             "",
             "📦 <b>종목별 현재 상태</b>",
         ]
@@ -342,7 +407,38 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
         if "[JDSS V3.2.2 운영 대시보드]" in text:
             text = self._format_auto_dashboard()
-        super()._send(text, markup=markup, chat_id=chat_id)
+        try:
+            super()._send(text, markup=markup, chat_id=chat_id)
+        except Exception as exc:
+            if threading.get_ident() != getattr(self, "_scheduler_thread_id", None):
+                raise
+            # Delivery is not an order failure. Never retry the broker operation or
+            # terminate monitoring because Telegram is temporarily unreachable.
+            telegram_bot_module.LOGGER.error("자동운용 알림 전송 실패: %s", type(exc).__name__)
+            self.repository.set_system_value("jh_auto_notification_failed_at", datetime.now(UTC).isoformat())
+            self.repository.set_system_value("jh_auto_notification_error", type(exc).__name__)
+
+    def _record_scheduler_heartbeat(self) -> None:
+        self.repository.set_system_value("jh_auto_scheduler_heartbeat", datetime.now(UTC).isoformat())
+
+    def _scheduler_loop(self) -> None:
+        self._scheduler_thread_id = threading.get_ident()
+        self.repository.set_system_value("jh_auto_watchdog_version", "1")
+        while not self._stop.is_set():
+            try:
+                super()._scheduler_loop()
+                return
+            except Exception as exc:
+                # This is a process boundary. Resume observation only after closing
+                # BUY; existing order identity/reconciliation prevents blind replay.
+                telegram_bot_module.LOGGER.error("자동운용 주기 예외: %s", type(exc).__name__)
+                try:
+                    self.auto_service.quarantine(f"AUTO_SCHEDULER_ERROR:{type(exc).__name__}")
+                except Exception:
+                    telegram_bot_module.LOGGER.error("자동운용 격리 저장 실패; 외부 heartbeat 점검 필요")
+                    return
+                if self._stop.wait(self.config.scheduler.poll_interval_seconds):
+                    return
 
     def _prepare_today_buy_batch(self):
         # Read-only by design: /today must never create manual approvals in AUTO mode.
@@ -366,9 +462,10 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         clean = super()._run_order_safety_cycle()
         if not clean:
             return False
+        self.repository.set_system_value("jh_auto_last_safety_success_at", datetime.now(UTC).isoformat())
         try:
-            self.auto_service.try_release_quarantine(safety_ready=True)
-            self.auto_service.advance_ramp_if_ready()
+            if self.auto_service.try_release_quarantine(safety_ready=True):
+                self.auto_service.advance_ramp_if_ready()
         except Exception as exc:
             self.auto_service.quarantine(f"AUTO_SAFETY_STATE:{type(exc).__name__}")
             self._notify_runtime_error(
@@ -379,6 +476,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             return False
 
         try:
+            previous_cycle = self.repository.get_system_value("jh_auto_last_cycle_id")
             result = self.auto_service.execute_one(self.trading_service)
         except Exception as exc:
             self.auto_service.quarantine(f"AUTO_EXECUTION_BOUNDARY:{type(exc).__name__}")
@@ -388,14 +486,28 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 exc,
             )
             return False
+        if result is None:
+            current_cycle = self.repository.get_system_value("jh_auto_last_cycle_id")
+            if current_cycle and current_cycle != previous_cycle:
+                rows = self.auto_service.recent_cycles(1)
+                if rows and rows[0].get("status") == "ERROR":
+                    self._send(
+                        "⚠️ <b>[자동매수 검토·실행 오류]</b>\n\n"
+                        "• 원인 : 자동매수 검토 또는 주문 처리 중 오류\n"
+                        "• 주문 전송 여부 : /order · /account에서 실제 상태 확인\n"
+                        "• 현재 조치 : 이번 시도를 중단하고 안전조건을 다시 점검합니다.\n"
+                        "• 다음 조치 : /errors에서 원인을 확인하세요. 같은 주문을 직접 반복하지 마세요."
+                    )
         if result is not None:
             self._send(
                 "🤖 <b>[JH AUTO 자동주문]</b>\n\n"
                 f"• 종목 : <b>{html.escape(result.symbol)}</b>\n"
                 f"• 주문수량 : <code>{result.quantity}주</code>\n"
                 f"• 현재 체결 : <code>{result.filled_quantity}/{result.quantity}주</code>\n"
-                f"• 상태 : <code>{html.escape(result.status)}</code>\n\n"
-                "다음 신규 BUY는 주문감시와 계좌·원장 대조를 다시 통과한 뒤에만 진행됩니다."
+                f"• 미체결수량 : <code>{max(0, result.quantity - result.filled_quantity)}주</code>\n"
+                f"• 체결단가 : <code>{_money(result.average_fill_price) if result.average_fill_price is not None else '체결 전'}</code>\n"
+                f"• 상태 : <b>{_order_status_label(result.status)}</b>\n\n"
+                "다음 신규 매수는 주문감시와 계좌·원장 대조를 다시 통과한 뒤에만 진행됩니다."
             )
             # Prevent portfolio decisions/new orders in the same scheduler pass.
             return False
@@ -407,7 +519,9 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
     def _new_pending(self, kind: str, value: str) -> str:
         self._expire_pending()
         token = secrets.token_hex(6)
-        self._auto_pending[token] = _PendingAutoChange(kind, value, time.monotonic())
+        self._auto_pending[token] = _PendingAutoChange(
+            kind, value, time.monotonic(), self.auto_service.confirmation_state()
+        )
         return token
 
     def _expire_pending(self) -> None:
@@ -419,6 +533,10 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         }
 
     def _review_change(self, kind: str, value: str) -> tuple[str, InlineKeyboardMarkup]:
+        with BUY_EXECUTION_LOCK:
+            return self._review_change_locked(kind, value)
+
+    def _review_change_locked(self, kind: str, value: str) -> tuple[str, InlineKeyboardMarkup]:
         settings = self.auto_service.settings()
         if kind == "capital":
             proposed = self.auto_service._normalize_money(value)
@@ -450,6 +568,7 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 f"운용 기준자금 <code>{_money(settings.base_capital or 0)}</code>\n"
                 f"자동운용비율 <code>{settings.ratio_percent or 0:.2f}%</code>\n"
                 f"목표 자동원금 <code>{_money(settings.target_principal)}</code>\n\n"
+                f"첫 단계 허용원금(50%) <code>{_money(settings.target_principal * Decimal('0.5'))}</code>\n\n"
                 "승인 후에는 개별 매수승인 없이 JH AUTO가 실제 Toss 주문을 실행할 수 있습니다.\n"
                 "단, <b>이 확인 버튼 자체는 주문을 보내지 않습니다.</b> 다음 독립 안전주기에서 모든 조건을 다시 검사합니다."
             )
@@ -464,10 +583,16 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
         return f"⚠️ <b>[{title}]</b>\n\n{detail}\n\n한 번 더 확인해 주세요.", markup
 
     def _confirm_pending(self, token: str) -> str:
+        with BUY_EXECUTION_LOCK:
+            return self._confirm_pending_locked(token)
+
+    def _confirm_pending_locked(self, token: str) -> str:
         self._expire_pending()
         pending = self._auto_pending.pop(token, None)
         if pending is None:
             raise RuntimeError("확인 요청이 만료되었거나 이미 사용되었습니다")
+        if pending.settings_state != self.auto_service.confirmation_state():
+            raise RuntimeError("검토 후 자금·운용상태가 변경되었습니다. /auto에서 다시 검토해 주세요")
         if pending.kind in {"capital", "ratio"}:
             if self.repository.open_orders():
                 raise RuntimeError("진행 중 주문이 있어 자동운용 설정을 바꿀 수 없습니다")
@@ -512,11 +637,18 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
             lines.append("아직 자동주문 기록이 없습니다.")
             return "\n".join(lines)
         for row in rows:
+            filled = int(row.get('filled_qty') or 0)
+            requested = int(row.get('requested_qty') or 0)
+            average = row.get('average_fill_price')
             lines.append(
                 f"• <b>{html.escape(str(row.get('symbol') or '-'))}</b> "
-                f"<code>{row.get('filled_qty', 0)}/{row.get('requested_qty', 0)}주</code> · "
-                f"<code>{html.escape(str(row.get('status') or '-'))}</code>"
+                f"<code>{filled}/{requested}주</code> · "
+                f"<b>{_order_status_label(str(row.get('status') or ''))}</b>\n"
+                f"  시각 {_display_time(row.get('started_at'))} · 미체결 {max(0, requested - filled)}주\n"
+                f"  체결단가 {_money(average) if average is not None else '체결 전'} · "
+                f"체결금액 {_money(Decimal(str(average)) * filled) if average is not None else '체결 전'}"
             )
+        lines.append("접수·부분체결은 감시 중이며, 결과 확인이 필요하면 /order · /account를 확인하세요.")
         return "\n".join(lines)
 
     def _register_handlers(self) -> None:
@@ -606,7 +738,8 @@ class JHAutoTelegramBotApp(HardenedOperationalSafetyTelegramBotApp):
                 bot.answer_callback_query(call.id, "권한이 없습니다.", show_alert=True)
                 return
             _, token = call.data.split("|", 1)
-            self._auto_pending.pop(token, None)
+            with BUY_EXECUTION_LOCK:
+                self._auto_pending.pop(token, None)
             self._clear_callback_markup(call)
             bot.answer_callback_query(call.id, "취소했습니다.")
 

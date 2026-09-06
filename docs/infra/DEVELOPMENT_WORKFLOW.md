@@ -28,7 +28,7 @@ Codex, ChatGPT와 IDE 작업환경이 GitHub를 공용 **최종 기준 저장소
 
 | 환경·주체 | 주 책임 | 할 수 있는 일 | 하지 않는 일 |
 |---|---|---|---|
-| 사용자 | 우선순위·전략 채택·배포·live 승인 | 요구사항 확정, 후보 채택, 배포 승인, Telegram BUY 최종 승인 | 배포 승인을 live BUY 잠금 해제로 자동 해석하지 않음 |
+| 사용자 | 우선순위·전략 채택·배포·live 승인 | 요구사항 확정, 후보 채택, 배포 승인, Telegram 최초 시작·자금변경·매수 재개 승인 | 배포 승인을 live BUY 잠금 해제로 자동 해석하지 않음 |
 | Codex·로컬 IDE | 구현·디버깅·로컬 검증 | 코드 수정, 테스트, 작업트리 관리, 재현 | 사용자 미커밋 변경 덮어쓰기, 원격 secret 추정 |
 | ChatGPT·GitHub 연결 | 원격 변경·PR·Actions·작업 종결 | 최신 원격 확인, 브랜치/PR, Actions 추적, 승인된 ChatOps, 배포 후 상태 확인 | secret 조회·복제, 로컬 파일을 보았다고 가정 |
 | GitHub Actions | 공통 CI·연구 artifact·승인된 배포 | Ruff, pytest, Security, Backtest, dry-run/live-safe deploy, 외부 health check | 임의 branch·미검증 코드 운영 배포 |

@@ -15,7 +15,7 @@ from .prelive_hardening import (
     MAX_AUTO_SIGNAL_ATTEMPTS_PER_DAY,
     HardenedProductionJHAutoService,
 )
-from .service import AUTO_LAST_CYCLE_KEY, TARGET_QTY_GENERATION_KEY, AutoExecutionResult
+from .service import AUTO_LAST_CYCLE_KEY, TARGET_QTY_GENERATION_KEY, AutoExecutionResult, atomic_auto_change
 
 AUTO_RAMP_STAGE_AUTO_FILL_KEY = "jh_auto_ramp_stage_auto_fill_seen"
 NEW_YORK_TZ = ZoneInfo("America/New_York")
@@ -31,12 +31,15 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
         if repository.get_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY) is None:
             repository.set_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY, "0")
 
+    @atomic_auto_change
     def authorize_launch(self):
+        was_authorized = self.settings().launch_authorized
         updated = super().authorize_launch()
-        if updated.ramp_stage > 0:
+        if not was_authorized and updated.ramp_stage > 0:
             self.repository.set_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY, "0")
         return self.settings()
 
+    @atomic_auto_change
     def _set_operator_config(self, *, base, ratio):
         before = self.settings()
         updated = super()._set_operator_config(base=base, ratio=ratio)
@@ -54,6 +57,7 @@ class FinalOpsProductionJHAutoService(HardenedProductionJHAutoService):
         # stage must prove at least one real AUTO fill under that stage's capital.
         return self.repository.get_system_value(AUTO_RAMP_STAGE_AUTO_FILL_KEY) == "1"
 
+    @atomic_auto_change
     def advance_ramp_if_ready(self) -> bool:
         before = self.settings()
         changed = super().advance_ramp_if_ready()

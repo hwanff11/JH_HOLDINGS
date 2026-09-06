@@ -236,6 +236,9 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
     def _scheduler_loop(self) -> None:
         """Fail closed: settle orders, reconcile, then allow allocation decisions."""
         while not self._stop.wait(self.config.scheduler.poll_interval_seconds):
+            heartbeat = getattr(self, "_record_scheduler_heartbeat", None)
+            if heartbeat is not None:
+                heartbeat()
             now_utc = datetime.now(UTC)
             now_kst = now_utc.astimezone(SEOUL_TZ)
             maintenance = is_toss_order_maintenance_window(now_utc)

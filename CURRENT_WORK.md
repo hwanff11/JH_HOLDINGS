@@ -2,7 +2,7 @@
 
 > 이 문서는 **현재 운영 상태만 보는 롤링 상태판**입니다. 전략 설명은 [`docs/STRATEGY_GUIDE.md`](docs/STRATEGY_GUIDE.md), 투자전략 계약은 [`docs/JDSS_FINAL_SPEC.md`](docs/JDSS_FINAL_SPEC.md), 자동운용 계약은 [`docs/JH_AUTO_SPEC.md`](docs/JH_AUTO_SPEC.md), Telegram 운영은 [`docs/TELEGRAM_BOT_GUIDE.md`](docs/TELEGRAM_BOT_GUIDE.md), 실거래 전환·사고 대응은 [`docs/infra/LIVE_COMMISSIONING.md`](docs/infra/LIVE_COMMISSIONING.md)를 따릅니다.
 
-## 1. 현재 운영 상태
+## 1. 마지막 확인된 운영 상태
 
 - 투자전략: **JDSS 3.2.2**
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
@@ -22,144 +22,30 @@
 - 위험축소 SELL: **자동**, 불확실 상태에서는 안전정지와 계좌·원장 대조 우선
 - UNKNOWN 주문: **자동 재전송 금지**
 
-현재 runtime은 PR #330 `/dashboard` fast-path 병합본과 일치합니다. 이후 문서-only 상태판 변경은 Oracle runtime 재배포 대상이 아닙니다.
+2026-09-06 외부 점검에서 서비스·DB·신규매수 잠금 유지와 위 배포본을 확인했습니다. 현재 작업 브랜치의 수정은 운영 서버에 아직 배포하지 않았습니다.
 
-## 2. JH AUTO 1.0.0 반영 완료
+## 2. 현재 수정 작업
 
-PR #312에서 JDSS 3.2.2 투자전략 수학은 유지하고 다음 실행 책임을 JH AUTO로 분리했습니다.
+- 활성 branch: `fix/auto-prelaunch-safety-ux`
+- 목적: 첫 매수 전 운영 오류 수정과 Telegram 사용성 개선
+- 주문 결과 알림 실패가 주문감시를 중단하지 않도록 분리
+- 스케줄러 최근 동작시각을 기록하고 외부 점검에서 확인
+- 검토 당시 설정과 달라진 자금·최초 시작 확인 버튼 거부
+- 최초 시작·자금변경·단계확대를 원자적으로 저장하고 실패 시 전체 취소
+- 대표 긴급정지·임시격리 중 자금확대 중지
+- 시작 전 성과 표시, 지금 할 일, 자금확대 조건, 한글 주문상태·체결내역 개선
+- 로컬 전체 테스트 및 커버리지 기준 통과, 추가 장애·동시성·외부 점검·문서 검증 통과
+- GitHub CI 결과는 이 PR과 Actions에서 확인하며 운영 배포와 구분
 
-- 운영자가 정하는 운용 기준자금과 자동운용비율
-- 실제 허용원금과 50→75→100 자금개방 단계
-- 자금 유입·회수를 투자수익과 분리하는 성과회계
-- 자동 BUY 승인·실행
-- 최초 시작승인과 서버 재시작 임시격리
-- 대표 `/halt` 지속정지표시
-- Telegram 자동운용 통제·감시 화면
+## 3. 바로 다음 작업
 
-자동 BUY는 기존 `TradingService → OrderManager` 최종 주문 안전경계를 우회하지 않습니다.
+1. 수정 PR의 품질·보안·기존 전략 백테스트 검증 확인
+2. 검토·병합 후 운영 배포가 승인된 경우 LIVE-ARMED 경로로 반영
+3. 배포 후 서비스·주문감시 최근 동작시각·계좌 대조·매수 잠금 유지 확인
+4. 대표가 Telegram에서 운용자금과 비율을 확인하고 최초 시작을 직접 승인
 
-## 3. 2026-09-03 실거래 안전강화·운영 최적화
+첫 시작은 `/dashboard` → `/auto` → 자금·비율 설정 → `/account` → `/auto start` 순서입니다. 최초 시작 버튼은 주문을 제출하지 않으며 다음 독립 안전주기에서 모든 주문 조건을 재검증합니다. `/halt`는 시스템이 자동으로 해제하지 않습니다.
 
-PR #316에서 실거래 전 안전강화를 반영했고, 첫 배포에서 **Telegram 메뉴 검증 스크립트가 과거 `/onboarding` 메뉴를 하드코딩한 문제**가 발견되어 배포가 fail-closed로 중단·자동복구되었습니다. 실제 JH AUTO 운영자 메뉴는 `/auto`를 사용하므로 PR #318에서 배포 smoke check가 JH AUTO 코드의 `_auto_bot_commands()`를 단일 기준으로 사용하도록 수정하고 회귀테스트를 추가했습니다.
+## 4. 기준 문서
 
-이후 실제 무인운영 직전 운영리스크를 다시 검토해 PR #321에서 다음을 추가 강화했습니다.
-
-- 동일 live SQLite 원장에 두 runtime이 동시에 붙지 못하도록 OS 파일잠금 적용
-- JH AUTO allocation 실행을 미국 정규장으로 제한
-- 자동 BUY 주문과 JH AUTO cycle ID를 실제 주문 원장까지 연결
-- 주문 제출 뒤 늦게 발생한 체결도 OrderMonitor가 AUTO cycle과 자금단계에 반영
-- 50→75→100 각 자금개방 단계마다 실제 AUTO 체결 증거 요구
-- 코어 BUY가 체결대기 한도를 넘으면 취소 후 상태를 확정하고, 취소상태가 불명확하면 SAFE_MODE
-- 자동매수 시도 상한을 미국 거래일 기준으로 적용
-- 위 최종 운영리스크 회귀테스트를 LIVE 배포 안전 gate에 포함
-
-### PR #324 — 실운영 표시·문서 최종 정합성
-
-실운영 직전 Telegram과 운영문서를 다시 대조해 다음을 정리했습니다.
-
-- JDSS의 `$50,000`을 **연구·백테스트 비교 기준**과 **실거래 운용자금**으로 명확히 분리
-- 최초 `/auto start` 전에는 legacy HWM 값을 실거래 위험한도처럼 표시하지 않고 `시작 전`으로 표시
-- 시작 후 `HWM75 위험한도` 표현을 **`HWM75 현재 위험예산`**으로 통일
-- 아침 브리핑의 legacy 자금/HWM 표시를 실제 JH AUTO 자금상태 기준으로 정규화
-- 정상 JH AUTO에서는 개별 BUY마다 사람이 승인하지 않는다는 자동실행 계약으로 Telegram 문구 정리
-- `/today`를 수동 승인화면이 아닌 자동운용 관찰화면으로 통일
-- 시스템 임시격리와 대표 `/halt` 지속정지를 문서상 명확히 분리
-- LIVE entrypoint에서 전용 JH AUTO 표시 보호계층 사용
-
-PR #324 head `7054b3b8c4a1b0b1ab525d34e3a99b5719f6d28a`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `e0d23d25e0e7b76781f7c0a65fbb8a7275ddb635`입니다. 해당 버전은 Oracle LIVE-ARMED에 정상 배포되었습니다.
-
-### PR #327 — Telegram 조회 응답속도 최적화
-
-실운영 전 Telegram 명령 지연을 다시 추적해, long polling 주기가 아니라 `/dashboard`, `/today`, `/portfolio` 표시를 만들 때 동일 시세와 portfolio snapshot을 반복 조회하는 것이 주된 불필요 호출원임을 확인했습니다.
-
-PR #327에서 다음을 적용했습니다.
-
-- QQQ/TQQQ/SOXL 표시용 시세를 종목별 반복 GET 대신 **한 번의 묶음 조회**로 생성
-- 같은 Telegram 명령 내부의 반복 snapshot과 매우 빠른 후속 조회를 **1초 표시 전용 캐시**로 통합
-- 캐시 반환값을 deep copy하여 화면 가공이 캐시 원본을 변경하지 못하도록 보호
-- allocation 실행 후 표시 캐시 즉시 무효화
-- 표시 snapshot 생성이 0.75초 이상 걸리면 서버 로그에 소요시간을 기록해 향후 병목 추적 가능
-- 묶음조회 1회, 단기캐시 재사용, 캐시 무효화를 회귀테스트로 고정
-
-이 캐시는 **Telegram 읽기 화면에만 사용**합니다. OrderManager, 주문수량·주문가격, 매수가능금액 확인, reconciliation, SAFE_MODE, 대표 `/halt`, 최초 시작승인에는 사용하지 않으므로 매매 안전성과 주문 시세 신선도 계약은 변경하지 않았습니다.
-
-PR #327 head `d9774f128bfe1d004103e893059d9acba8936539`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `29333dcbaa2776a897059d13c0e9f9191560693e`입니다. 병합 후 `main` Quality Gate와 Security도 통과했습니다.
-
-Oracle LIVE-ARMED 배포는 GitHub Issue #328 / Actions run `33744473969`에서 성공했습니다.
-
-### PR #330 — `/dashboard` 전용 fast-path
-
-PR #327 이후 `/portfolio`와 `/today`는 빨라졌지만 `/dashboard`만 상대적으로 느린 원인을 다시 추적했습니다. 기존 상위 V3 dashboard handler가 단순 조회 요청마다 `analysis_service.analyze_all()`을 먼저 실행해 약 500일치 SPY/QQQ/SOXX/SMH/TQQQ/SOXL 일봉을 refresh·지표계산한 뒤, JH AUTO 표시계층에서 해당 legacy dashboard 문구를 버리고 AUTO dashboard를 다시 생성하고 있었습니다.
-
-PR #330에서 다음을 적용했습니다.
-
-- LIVE JH AUTO의 `/dashboard`와 `/d`를 inherited V3 dashboard보다 먼저 처리하는 전용 fast-path 추가
-- 단순 dashboard 조회에서는 legacy `analysis_service.analyze_all()` 전체 재계산을 생략
-- 대시보드는 SQLite 안전상태와 기존 표시 전용 portfolio snapshot으로 직접 생성
-- 최초 시작 전 HWM 문구 보정에서 불필요한 두 번째 performance snapshot 제거
-- dashboard 준비시간이 0.75초 이상이면 서버 로그에 기록
-- fast-path handler 우선순위와 prelaunch HWM 무추가조회 회귀테스트 추가
-
-`/score` 등 명시적으로 전략분석을 요청하는 기능과 scheduler의 전략계산은 그대로 유지합니다. 전략수학, allocation, OrderManager, Toss 주문 write path, reconciliation, SAFE_MODE 경계는 변경하지 않았습니다.
-
-PR #330 head `2f589fbac97a2334b33eb9139fd174952e0ea0f5`에서 Quality Gate / Security / JDSS V3 Backtest가 모두 통과했고, squash 병합된 `main`은 `086f9f63dc3e0715a2c5080bc7190b27ab133ac0`입니다. 병합 후 `main` Quality Gate와 Security도 통과했습니다.
-
-Oracle LIVE-ARMED 배포는 GitHub Issue #331 / Actions run `33747287589`에서 성공했고, 실제 runtime은 `086f9f63dc3e0715a2c5080bc7190b27ab133ac0`입니다.
-
-최종 배포 검증 결과:
-
-- 정확한 최신 `main` SHA **확인**
-- LIVE 배포 직전 JH AUTO/실거래 회귀테스트 **통과**
-- pinned SSH trust **통과**
-- 배포 전 신규 BUY 잠금 **확인**
-- 기존 실거래 원장·계좌 연결 **보존**
-- 계좌 대조·읽기 전용 점검 **통과**
-- Telegram 운영자 메뉴 8개 실제 등록 확인 **통과**
-- 배포 후 신규 BUY 잠금 **유지**
-- `/resume` 자동 실행하지 않음
-- `/auto start` 및 JH AUTO 최초 시작승인을 배포 작업으로 대신하지 않음
-- 자동운용 기준자금·비율을 배포 작업에서 임의 변경하지 않음
-
-## 4. 현재 BUY 안전계약
-
-현재는 **실운영 코드 배포 완료 상태이지 자동운용 시작 상태가 아닙니다.** 배포는 실제 BUY 권한을 열지 않습니다.
-
-자동매수를 시작하려면 다음 조건을 모두 통과해야 합니다.
-
-1. 운영자가 Telegram에서 기준자금과 자동운용비율을 확정
-2. `/auto start`의 2단계 최초 시작확인을 운영자가 직접 수행
-3. 시작확인 처리 자체에서는 Toss 주문 0건
-4. 다음 독립 안전주기에 계좌·원장 일치 확인
-5. 미체결·UNKNOWN 없음
-6. 안전정지 없음
-7. 대표 긴급정지 없음
-8. 미국 정규장
-9. 최신 목표·가격·수량 재계산
-10. OrderManager 최종검증
-
-JH AUTO는 한 안전주기에서 신규 BUY를 최대 1건만 실행합니다. 부분체결·거부·불명확 결과가 발생해도 잔여수량을 즉시 반복주문하지 않습니다.
-
-## 5. 대표 긴급정지와 재시작
-
-- `/halt`는 신규 BUY를 즉시 막는 **지속되는 대표 긴급정지**입니다.
-- 계좌가 정상으로 다시 보여도 시스템이 `/halt`를 자동으로 해제하지 않습니다.
-- `/resume`은 기존 2단계 확인과 계좌·원장 재대조를 통과해야 합니다.
-- 서버 재시작·배포는 대표 긴급정지와 별개의 **시스템 임시격리**로 시작합니다.
-- 이미 최초 시작승인이 있는 정상 runtime은 재시작 후 계좌·원장·주문상태가 모두 정상임을 다시 증명한 뒤 시스템 임시격리만 자동해제할 수 있습니다.
-- 대표 `/halt`는 어떤 자동복구 경로에서도 자동해제하지 않습니다.
-
-## 6. 바로 다음 작업
-
-코드·문서·실운영 배포·실거래 안전검증·Telegram 조회 최적화·`/dashboard` fast-path까지 완료했습니다. 다음 단계는 **대표의 JH AUTO 최초 운용설정과 소액 자동운용 시작**입니다.
-
-Telegram에서 다음 순서로 진행합니다.
-
-1. `/dashboard` — 실계좌·신규 BUY 차단·안전정지 상태 확인
-2. `/auto` — 현재 JH AUTO 설정 확인
-3. `/auto capital <금액>` — 운용 기준자금 설정 후 2단계 확정
-4. `/auto ratio <비율>` — 자동운용비율 설정 후 2단계 확정
-5. `/account` — 실제 매수가능금액과 관리종목 확인
-6. `/auto start` — **대표가 직접** 최초 자동운용 시작을 2단계 확정
-7. 첫 실제 BUY는 버튼 처리 중이 아니라 다음 정상 안전주기에서 발생 여부를 관찰
-
-초기에는 소액으로 시작하고, 자동주문·체결·원장반영·계좌대조가 반복해서 정상임을 확인한 뒤 자동운용 원금을 단계적으로 높입니다.
+전략 수학은 `strategy.yaml`과 [투자전략 계약](docs/JDSS_FINAL_SPEC.md), 자동운용은 [JH AUTO 계약](docs/JH_AUTO_SPEC.md), 운영 화면은 [Telegram 가이드](docs/TELEGRAM_BOT_GUIDE.md)를 따릅니다. 완료된 과거 작업은 [이력](docs/HISTORY.md)과 병합 PR에서 확인합니다.

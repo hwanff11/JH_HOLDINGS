@@ -58,26 +58,52 @@ class SQLiteRepository:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.config = config
         self._lock = threading.RLock()
+        self._transaction_local = threading.local()
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        active = getattr(self._transaction_local, "connection", None)
+        if active is not None:
+            # Reads inside a unit of work must see its uncommitted writes without
+            # allowing a nested connection context to commit the outer transaction.
+            yield active
+            return
         connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
-        return connection
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        active = getattr(self._transaction_local, "connection", None)
+        if active is not None:
+            savepoint = "nested_" + secrets.token_hex(8)
+            active.execute(f"SAVEPOINT {savepoint}")
+            try:
+                yield active
+            except BaseException:
+                active.execute(f"ROLLBACK TO {savepoint}")
+                raise
+            finally:
+                active.execute(f"RELEASE {savepoint}")
+            return
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._transaction_local.connection = connection
             try:
                 yield connection
-            except Exception:
+            except BaseException:
                 connection.rollback()
                 raise
             else:
                 connection.commit()
+            finally:
+                self._transaction_local.connection = None
 
     def _initialize(self) -> None:
         with self._connect() as connection:
