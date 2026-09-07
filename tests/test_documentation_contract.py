@@ -182,7 +182,7 @@ def test_jh_auto_live_capital_launch_and_hardening_contract_is_explicit():
         "HWM75 현재 위험예산",
         "/auto start",
         "주문 0건",
-        "50% → 75% → 100%",
+        "50→75→100",
         "실제 JH AUTO 주문 체결 증거",
         "broker POST 직전",
         "동일 신호 자동시도",
