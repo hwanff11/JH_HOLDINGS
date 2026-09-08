@@ -1,0 +1,73 @@
+name: Patch CCI Deploy Python 3.12
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  patch:
+    if: >-
+      github.actor == github.repository_owner &&
+      startsWith(github.event.issue.title, '[patch-cci-python312]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch deploy workflow and open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -Eeuo pipefail
+          BRANCH="ops/cci-deploy-python312-durable"
+          FILE=".github/workflows/deploy-cci-oracle.yml"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/deploy-cci-oracle.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '''          python3 -m venv "$STAGE_DIR/venv"
+          "$STAGE_DIR/venv/bin/pip" install --disable-pip-version-check -q -r "$STAGE_DIR/requirements.txt"
+'''
+          new = '''          UV_BIN="$HOME/.local/bin/uv"
+          if [[ ! -x "$UV_BIN" ]]; then
+            python3 -m pip install --user --disable-pip-version-check --no-warn-script-location "uv==0.12.10"
+          fi
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          "$UV_BIN" python install 3.12
+          "$UV_BIN" venv --python 3.12 "$STAGE_DIR/venv"
+          "$UV_BIN" pip install --python "$STAGE_DIR/venv/bin/python" -r "$STAGE_DIR/requirements.txt"
+'''
+          if old not in text:
+              raise SystemExit('expected deployment venv block not found exactly once')
+          if text.count(old) != 1:
+              raise SystemExit('deployment venv block occurrence count is not 1')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+          git diff --check
+          git diff -- "$FILE"
+          git add "$FILE"
+          git commit -m "ops: use managed Python 3.12 for CCI deploy"
+          git push origin "$BRANCH"
+          gh pr create \
+            --repo "$GH_REPO" \
+            --base main \
+            --head "$BRANCH" \
+            --title "ops: CCI 배포 Python 3.12 런타임 고정" \
+            --body "Oracle 시스템 Python은 변경하지 않고, CCI staging venv를 uv 0.12.10 + managed Python 3.12로 생성하도록 배포 workflow를 영구 수정합니다. 첫 운영배포 실패 원인(pandas>=2.2 미지원)을 제거합니다."
+          gh issue comment "$ISSUE_NUMBER" --body "✅ Python 3.12 durable deploy patch PR 생성 완료"
