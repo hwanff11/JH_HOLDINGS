@@ -37,7 +37,7 @@ jobs:
           printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/oracle_cci ~/.ssh/known_hosts
 
-      - name: Deploy exact CCI main from existing server git clone
+      - name: Deploy exact CCI main using staged clone
         env:
           SERVER_HOST: ${{ secrets.ORACLE_HOST }}
           SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
@@ -56,51 +56,75 @@ jobs:
           TARGET_DIR="$1"
           SERVICE_NAME="$2"
           EXPECTED_SHA="$3"
-          cd "$TARGET_DIR"
-
-          test -d .git || { echo 'CCI target is not a git clone'; exit 20; }
-          test -f .env || { echo 'CCI runtime .env missing'; exit 21; }
-          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
-            echo '.env must remain untracked'; exit 22
-          fi
-
-          CURRENT_SHA="$(git rev-parse HEAD)"
+          REPO_URL="https://github.com/hwanff11/cci_nvdl.git"
+          PARENT_DIR="$(dirname "$TARGET_DIR")"
+          BASE_NAME="$(basename "$TARGET_DIR")"
           STAMP="$(date +%Y%m%d_%H%M%S)"
-          BACKUP_DIR="$TARGET_DIR/.deploy_backups/$STAMP"
+          STAGE_DIR="$PARENT_DIR/.${BASE_NAME}.stage.$STAMP"
+          OLD_DIR="$PARENT_DIR/.${BASE_NAME}.predeploy.$STAMP"
+          BACKUP_DIR="$PARENT_DIR/.cci_deploy_backups/$STAMP"
+          FAILED_DIR="$PARENT_DIR/.${BASE_NAME}.failed.$STAMP"
+          SWAPPED=0
+
+          test -d "$TARGET_DIR" || { echo 'CCI target directory missing'; exit 20; }
+          test -f "$TARGET_DIR/.env" || { echo 'CCI runtime .env missing'; exit 21; }
           mkdir -p "$BACKUP_DIR"
-          cp .env "$BACKUP_DIR/.env"
+          cp "$TARGET_DIR/.env" "$BACKUP_DIR/.env"
           for f in state.db state.db-wal state.db-shm bot.log; do
-            [[ ! -f "$f" ]] || cp "$f" "$BACKUP_DIR/$f"
+            [[ ! -f "$TARGET_DIR/$f" ]] || cp "$TARGET_DIR/$f" "$BACKUP_DIR/$f"
           done
-          printf '%s\n' "$CURRENT_SHA" > "$BACKUP_DIR/previous_commit.txt"
 
           rollback() {
             rc=$?
-            echo "Deployment failed (rc=$rc). Rolling code back to $CURRENT_SHA" >&2
-            git checkout --force "$CURRENT_SHA" >/dev/null 2>&1 || true
-            [[ ! -f "$BACKUP_DIR/.env" ]] || cp "$BACKUP_DIR/.env" .env
-            if [[ -f requirements.txt ]]; then
-              python3 -m venv venv || true
-              venv/bin/pip install --disable-pip-version-check -q -r requirements.txt || true
+            echo "Deployment failed (rc=$rc). Restoring previous runtime directory." >&2
+            if [[ "$SWAPPED" = 1 ]]; then
+              sudo systemctl stop "$SERVICE_NAME" || true
+              [[ ! -e "$TARGET_DIR" ]] || mv "$TARGET_DIR" "$FAILED_DIR" || true
+              [[ ! -e "$OLD_DIR" ]] || mv "$OLD_DIR" "$TARGET_DIR" || true
+              sudo systemctl daemon-reload || true
+              sudo systemctl restart "$SERVICE_NAME" || true
+              sudo systemctl --no-pager --full status "$SERVICE_NAME" | head -25 || true
             fi
-            sudo systemctl restart "$SERVICE_NAME" || true
-            sudo systemctl --no-pager --full status "$SERVICE_NAME" | head -25 || true
+            [[ ! -e "$STAGE_DIR" ]] || rm -rf "$STAGE_DIR"
             exit "$rc"
           }
           trap rollback ERR
 
-          git fetch --no-tags origin main
-          FETCHED_SHA="$(git rev-parse origin/main)"
-          test "$FETCHED_SHA" = "$EXPECTED_SHA" || {
-            echo "origin/main mismatch: expected=$EXPECTED_SHA fetched=$FETCHED_SHA"; false;
+          # Do not prompt for credentials in automation. Existing server-side
+          # git/gh credentials may satisfy this private-repository check.
+          export GIT_TERMINAL_PROMPT=0
+          export GCM_INTERACTIVE=never
+          if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            gh auth setup-git >/dev/null 2>&1 || true
+          fi
+          git ls-remote --exit-code "$REPO_URL" refs/heads/main >/dev/null || {
+            echo 'SERVER_PRIVATE_REPO_AUTH_UNAVAILABLE'; false;
           }
-          git checkout --force "$EXPECTED_SHA"
 
-          python3 -m venv venv
-          venv/bin/pip install --disable-pip-version-check -q -r requirements.txt
-          venv/bin/python -m py_compile \
-            bot_main.py bot_app.py runtime_hardening.py strategy_engine.py \
-            indicator.py toss_client.py state_manager.py
+          git clone --quiet --no-tags --branch main "$REPO_URL" "$STAGE_DIR"
+          test "$(git -C "$STAGE_DIR" rev-parse HEAD)" = "$EXPECTED_SHA" || {
+            echo "CCI main mismatch in staged clone"; false;
+          }
+          if git -C "$STAGE_DIR" ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo '.env unexpectedly tracked in CCI repository'; false
+          fi
+
+          cp "$TARGET_DIR/.env" "$STAGE_DIR/.env"
+          for f in state.db state.db-wal state.db-shm bot.log; do
+            [[ ! -f "$TARGET_DIR/$f" ]] || cp "$TARGET_DIR/$f" "$STAGE_DIR/$f"
+          done
+
+          python3 -m venv "$STAGE_DIR/venv"
+          "$STAGE_DIR/venv/bin/pip" install --disable-pip-version-check -q -r "$STAGE_DIR/requirements.txt"
+          "$STAGE_DIR/venv/bin/python" -m py_compile \
+            "$STAGE_DIR/bot_main.py" "$STAGE_DIR/bot_app.py" \
+            "$STAGE_DIR/runtime_hardening.py" "$STAGE_DIR/strategy_engine.py" \
+            "$STAGE_DIR/indicator.py" "$STAGE_DIR/toss_client.py" "$STAGE_DIR/state_manager.py"
+
+          sudo systemctl stop "$SERVICE_NAME" || true
+          mv "$TARGET_DIR" "$OLD_DIR"
+          mv "$STAGE_DIR" "$TARGET_DIR"
+          SWAPPED=1
 
           cat > "/tmp/${SERVICE_NAME}.service" <<EOF
           [Unit]
@@ -130,12 +154,17 @@ jobs:
           sleep 6
           sudo systemctl is-active --quiet "$SERVICE_NAME"
 
-          RUNNING_MAIN="$(tr '\0' ' ' < /proc/$(systemctl show -p MainPID --value "$SERVICE_NAME")/cmdline)"
+          MAIN_PID="$(sudo systemctl show -p MainPID --value "$SERVICE_NAME")"
+          test "$MAIN_PID" != 0
+          RUNNING_MAIN="$(tr '\0' ' ' < "/proc/$MAIN_PID/cmdline")"
           case "$RUNNING_MAIN" in
             *"$TARGET_DIR/bot_main.py"*) ;;
             *) echo "unexpected process command: $RUNNING_MAIN"; false ;;
           esac
+          test "$(git -C "$TARGET_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
 
+          mv "$OLD_DIR" "$BACKUP_DIR/source_predeploy"
+          SWAPPED=0
           trap - ERR
           echo "CCI_DEPLOY_OK commit=$EXPECTED_SHA backup=$BACKUP_DIR"
           REMOTE
@@ -168,10 +197,11 @@ jobs:
 
           c = TossClient()
           c.authenticate()
+          balances = {}
           for symbol in ("NVDL", "USD"):
-              c.get_account_balances(symbol)
+              balances[symbol] = c.get_account_balances(symbol)
           open_orders = c.get_orders(status="OPEN", limit=100)
-          print(f"BROKER_READ_OK open_orders={len(open_orders)}")
+          print(f"BROKER_READ_OK symbols={','.join(balances)} open_orders={len(open_orders)}")
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
           chat_id = os.environ["TELEGRAM_CHAT_ID"]
@@ -189,7 +219,7 @@ jobs:
               f"{base}/sendMessage",
               json={
                   "chat_id": chat_id,
-                  "text": "✅ CCI v4.0.1 운영배포 및 서버 헬스체크 완료\n- systemd active\n- Toss read-only 조회 정상\n- /ping /status /order 명령 등록 확인",
+                  "text": "✅ CCI v4.0.1 운영배포 및 서버 헬스체크 완료\n- systemd active\n- Toss NVDL/USD read-only 조회 정상\n- /ping /status /order 명령 등록 확인",
               },
               timeout=10,
           )
@@ -211,6 +241,7 @@ jobs:
         if: always() && github.event_name == 'issues'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -219,6 +250,6 @@ jobs:
           if [[ "$JOB_STATUS" == "success" ]]; then
             body="✅ CCI v4.0.1 Oracle 운영배포 성공\n\n정확한 CCI main 커밋 \`2302e8e91d95c945d30dacf48672959858a4fa1a\` 배포, systemd 이중 active 확인, Toss read-only 잔고/OPEN 주문 조회, Telegram command 등록 및 알림 전송, 최근 fatal 예외 점검까지 통과했습니다.\n\nActions: $RUN_URL"
           else
-            body="❌ CCI Oracle 운영배포 실패\n\n배포 실패 시 이전 Git commit으로 자동 rollback을 시도합니다. Actions: $RUN_URL"
+            body="❌ CCI Oracle 운영배포 실패\n\n배포 실패 시 기존 운영 디렉터리 보존 또는 자동 복원을 수행합니다. Actions: $RUN_URL"
           fi
           gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$body")"
