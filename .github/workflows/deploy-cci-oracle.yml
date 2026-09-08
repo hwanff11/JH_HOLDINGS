@@ -6,7 +6,7 @@ on:
     types: [opened, reopened]
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 concurrency:
@@ -22,6 +22,30 @@ jobs:
     runs-on: ubuntu-latest
     environment: oracle-dry-run
     steps:
+      - name: Checkout encrypted CCI payload only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ops/cci-v4.0.1-encrypted-payload
+          path: payload_repo
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate encrypted payload manifest
+        env:
+          EXPECTED_SHA: 2302e8e91d95c945d30dacf48672959858a4fa1a
+        run: |
+          set -Eeuo pipefail
+          PAYLOAD_DIR="$GITHUB_WORKSPACE/payload_repo/.cci_payload"
+          test -d "$PAYLOAD_DIR"
+          test "$(tr -d '\r\n' < "$PAYLOAD_DIR/commit.sha")" = "$EXPECTED_SHA"
+          test -s "$PAYLOAD_DIR/key.b64"
+          test -s "$PAYLOAD_DIR/payload.enc.sha256"
+          test -s "$PAYLOAD_DIR/payload.plain.sha256"
+          compgen -G "$PAYLOAD_DIR/payload.part.*" >/dev/null
+          cat "$PAYLOAD_DIR"/payload.part.* | base64 -d > "$RUNNER_TEMP/cci_payload.enc"
+          test "$(sha256sum "$RUNNER_TEMP/cci_payload.enc" | awk '{print $1}')" = "$(tr -d '\r\n' < "$PAYLOAD_DIR/payload.enc.sha256")"
+          rm -f "$RUNNER_TEMP/cci_payload.enc"
+
       - name: Prepare pinned Oracle SSH trust
         env:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
@@ -37,13 +61,11 @@ jobs:
           printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/oracle_cci ~/.ssh/known_hosts
 
-      - name: Deploy exact CCI main using staged clone
+      - name: Transfer encrypted payload to Oracle
         env:
           SERVER_HOST: ${{ secrets.ORACLE_HOST }}
           SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
-          EXPECTED_SHA: 2302e8e91d95c945d30dacf48672959858a4fa1a
-          TARGET_DIR: /home/ubuntu/cci_nvdl
-          SERVICE_NAME: cci_bot
+          REMOTE_PAYLOAD_DIR: /home/ubuntu/.cci_payload_transfer_v401
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/oracle_cci \
@@ -51,28 +73,50 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o ConnectTimeout=10 \
             "$SERVER_USER@$SERVER_HOST" \
-            bash -s -- "$TARGET_DIR" "$SERVICE_NAME" "$EXPECTED_SHA" <<'REMOTE'
+            "rm -rf '$REMOTE_PAYLOAD_DIR' && install -d -m 700 '$REMOTE_PAYLOAD_DIR'"
+          scp -i ~/.ssh/oracle_cci \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "$GITHUB_WORKSPACE"/payload_repo/.cci_payload/* \
+            "$SERVER_USER@$SERVER_HOST:$REMOTE_PAYLOAD_DIR/"
+
+      - name: Decrypt, deploy and verify exact CCI v4.0.1
+        env:
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          EXPECTED_SHA: 2302e8e91d95c945d30dacf48672959858a4fa1a
+          TARGET_DIR: /home/ubuntu/cci_nvdl
+          SERVICE_NAME: cci_bot
+          REMOTE_PAYLOAD_DIR: /home/ubuntu/.cci_payload_transfer_v401
+          PRIVATE_KEY: /home/ubuntu/.cci_payload_key_v401.pem
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/oracle_cci \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=10 \
+            "$SERVER_USER@$SERVER_HOST" \
+            bash -s -- "$TARGET_DIR" "$SERVICE_NAME" "$EXPECTED_SHA" "$REMOTE_PAYLOAD_DIR" "$PRIVATE_KEY" <<'REMOTE'
           set -Eeuo pipefail
           TARGET_DIR="$1"
           SERVICE_NAME="$2"
           EXPECTED_SHA="$3"
-          REPO_URL="https://github.com/hwanff11/cci_nvdl.git"
+          PAYLOAD_DIR="$4"
+          PRIVATE_KEY="$5"
           PARENT_DIR="$(dirname "$TARGET_DIR")"
           BASE_NAME="$(basename "$TARGET_DIR")"
           STAMP="$(date +%Y%m%d_%H%M%S)"
+          WORK_DIR="$PARENT_DIR/.cci_payload_work.$STAMP"
           STAGE_DIR="$PARENT_DIR/.${BASE_NAME}.stage.$STAMP"
           OLD_DIR="$PARENT_DIR/.${BASE_NAME}.predeploy.$STAMP"
-          BACKUP_DIR="$PARENT_DIR/.cci_deploy_backups/$STAMP"
           FAILED_DIR="$PARENT_DIR/.${BASE_NAME}.failed.$STAMP"
+          BACKUP_DIR="$PARENT_DIR/.cci_deploy_backups/$STAMP"
           SWAPPED=0
+          STOPPED=0
 
-          test -d "$TARGET_DIR" || { echo 'CCI target directory missing'; exit 20; }
-          test -f "$TARGET_DIR/.env" || { echo 'CCI runtime .env missing'; exit 21; }
-          mkdir -p "$BACKUP_DIR"
-          cp "$TARGET_DIR/.env" "$BACKUP_DIR/.env"
-          for f in state.db state.db-wal state.db-shm bot.log; do
-            [[ ! -f "$TARGET_DIR/$f" ]] || cp "$TARGET_DIR/$f" "$BACKUP_DIR/$f"
-          done
+          cleanup_transfer() {
+            rm -rf "$WORK_DIR" "$PAYLOAD_DIR" 2>/dev/null || true
+          }
 
           rollback() {
             rc=$?
@@ -84,34 +128,41 @@ jobs:
               sudo systemctl daemon-reload || true
               sudo systemctl restart "$SERVICE_NAME" || true
               sudo systemctl --no-pager --full status "$SERVICE_NAME" | head -25 || true
+            elif [[ "$STOPPED" = 1 ]]; then
+              sudo systemctl restart "$SERVICE_NAME" || true
             fi
-            [[ ! -e "$STAGE_DIR" ]] || rm -rf "$STAGE_DIR"
+            [[ ! -e "$STAGE_DIR" ]] || rm -rf "$STAGE_DIR" || true
+            cleanup_transfer
             exit "$rc"
           }
           trap rollback ERR
 
-          # Do not prompt for credentials in automation. Existing server-side
-          # git/gh credentials may satisfy this private-repository check.
-          export GIT_TERMINAL_PROMPT=0
-          export GCM_INTERACTIVE=never
-          if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-            gh auth setup-git >/dev/null 2>&1 || true
-          fi
-          git ls-remote --exit-code "$REPO_URL" refs/heads/main >/dev/null || {
-            echo 'SERVER_PRIVATE_REPO_AUTH_UNAVAILABLE'; false;
-          }
+          test -d "$TARGET_DIR" || { echo 'CCI target directory missing'; exit 20; }
+          test -f "$TARGET_DIR/.env" || { echo 'CCI runtime .env missing'; exit 21; }
+          test -s "$PRIVATE_KEY" || { echo 'CCI one-time private key missing'; exit 22; }
+          test -d "$PAYLOAD_DIR" || { echo 'Encrypted payload directory missing'; exit 23; }
+          test "$(tr -d '\r\n' < "$PAYLOAD_DIR/commit.sha")" = "$EXPECTED_SHA"
 
-          git clone --quiet --no-tags --branch main "$REPO_URL" "$STAGE_DIR"
-          test "$(git -C "$STAGE_DIR" rev-parse HEAD)" = "$EXPECTED_SHA" || {
-            echo "CCI main mismatch in staged clone"; false;
-          }
-          if git -C "$STAGE_DIR" ls-files --error-unmatch .env >/dev/null 2>&1; then
-            echo '.env unexpectedly tracked in CCI repository'; false
-          fi
+          install -d -m 700 "$WORK_DIR" "$STAGE_DIR" "$BACKUP_DIR"
+          cat "$PAYLOAD_DIR"/payload.part.* | base64 -d > "$WORK_DIR/payload.enc"
+          EXPECTED_ENC_HASH="$(tr -d '\r\n' < "$PAYLOAD_DIR/payload.enc.sha256")"
+          test "$(sha256sum "$WORK_DIR/payload.enc" | awk '{print $1}')" = "$EXPECTED_ENC_HASH"
+          base64 -d "$PAYLOAD_DIR/key.b64" > "$WORK_DIR/key.enc"
+          openssl pkeyutl -decrypt -inkey "$PRIVATE_KEY" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -in "$WORK_DIR/key.enc" -out "$WORK_DIR/aes.pass"
+          chmod 600 "$WORK_DIR/aes.pass"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in "$WORK_DIR/payload.enc" -out "$WORK_DIR/payload.tar.gz" \
+            -pass file:"$WORK_DIR/aes.pass"
+          EXPECTED_PLAIN_HASH="$(tr -d '\r\n' < "$PAYLOAD_DIR/payload.plain.sha256")"
+          test "$(sha256sum "$WORK_DIR/payload.tar.gz" | awk '{print $1}')" = "$EXPECTED_PLAIN_HASH"
+          tar -xzf "$WORK_DIR/payload.tar.gz" -C "$STAGE_DIR"
 
-          cp "$TARGET_DIR/.env" "$STAGE_DIR/.env"
-          for f in state.db state.db-wal state.db-shm bot.log; do
-            [[ ! -f "$TARGET_DIR/$f" ]] || cp "$TARGET_DIR/$f" "$STAGE_DIR/$f"
+          test "$(tr -d '\r\n' < "$STAGE_DIR/CCI_DEPLOY_SHA")" = "$EXPECTED_SHA"
+          test ! -e "$STAGE_DIR/.env"
+          for f in bot_main.py bot_app.py runtime_hardening.py strategy_engine.py indicator.py toss_client.py state_manager.py requirements.txt; do
+            test -f "$STAGE_DIR/$f" || { echo "Required deployment file missing: $f"; false; }
           done
 
           python3 -m venv "$STAGE_DIR/venv"
@@ -121,10 +172,22 @@ jobs:
             "$STAGE_DIR/runtime_hardening.py" "$STAGE_DIR/strategy_engine.py" \
             "$STAGE_DIR/indicator.py" "$STAGE_DIR/toss_client.py" "$STAGE_DIR/state_manager.py"
 
-          sudo systemctl stop "$SERVICE_NAME" || true
+          cp "$TARGET_DIR/.env" "$BACKUP_DIR/.env"
+          sudo systemctl stop "$SERVICE_NAME"
+          STOPPED=1
+          for f in state.db state.db-wal state.db-shm bot.log; do
+            if [[ -f "$TARGET_DIR/$f" ]]; then
+              cp "$TARGET_DIR/$f" "$BACKUP_DIR/$f"
+              cp "$TARGET_DIR/$f" "$STAGE_DIR/$f"
+            fi
+          done
+          cp "$TARGET_DIR/.env" "$STAGE_DIR/.env"
+          chmod 600 "$STAGE_DIR/.env"
+
           mv "$TARGET_DIR" "$OLD_DIR"
           mv "$STAGE_DIR" "$TARGET_DIR"
           SWAPPED=1
+          STOPPED=0
 
           cat > "/tmp/${SERVICE_NAME}.service" <<EOF
           [Unit]
@@ -161,35 +224,12 @@ jobs:
             *"$TARGET_DIR/bot_main.py"*) ;;
             *) echo "unexpected process command: $RUNNING_MAIN"; false ;;
           esac
-          test "$(git -C "$TARGET_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(tr -d '\r\n' < "$TARGET_DIR/CCI_DEPLOY_SHA")" = "$EXPECTED_SHA"
 
-          mv "$OLD_DIR" "$BACKUP_DIR/source_predeploy"
-          SWAPPED=0
-          trap - ERR
-          echo "CCI_DEPLOY_OK commit=$EXPECTED_SHA backup=$BACKUP_DIR"
-          REMOTE
-
-      - name: Verify broker read-only health and Telegram command registration
-        env:
-          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
-          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
-          TARGET_DIR: /home/ubuntu/cci_nvdl
-          SERVICE_NAME: cci_bot
-        run: |
-          set -Eeuo pipefail
-          ssh -i ~/.ssh/oracle_cci \
-            -o UserKnownHostsFile=~/.ssh/known_hosts \
-            -o StrictHostKeyChecking=yes \
-            "$SERVER_USER@$SERVER_HOST" \
-            bash -s -- "$TARGET_DIR" "$SERVICE_NAME" <<'REMOTE'
-          set -Eeuo pipefail
-          TARGET_DIR="$1"
-          SERVICE_NAME="$2"
           cd "$TARGET_DIR"
           set -a
           . ./.env
           set +a
-
           venv/bin/python - <<'PY'
           import os
           import requests
@@ -197,14 +237,11 @@ jobs:
 
           c = TossClient()
           c.authenticate()
-          balances = {}
-          for symbol in ("NVDL", "USD"):
-              balances[symbol] = c.get_account_balances(symbol)
+          balances = {symbol: c.get_account_balances(symbol) for symbol in ("NVDL", "USD")}
           open_orders = c.get_orders(status="OPEN", limit=100)
           print(f"BROKER_READ_OK symbols={','.join(balances)} open_orders={len(open_orders)}")
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat_id = os.environ["TELEGRAM_CHAT_ID"]
           base = f"https://api.telegram.org/bot{token}"
           me = requests.get(f"{base}/getMe", timeout=10)
           me.raise_for_status()
@@ -215,27 +252,50 @@ jobs:
           missing = required - names
           if missing:
               raise SystemExit(f"missing Telegram commands: {sorted(missing)}")
-          msg = requests.post(
-              f"{base}/sendMessage",
-              json={
-                  "chat_id": chat_id,
-                  "text": "✅ CCI v4.0.1 운영배포 및 서버 헬스체크 완료\n- systemd active\n- Toss NVDL/USD read-only 조회 정상\n- /ping /status /order 명령 등록 확인",
-              },
-              timeout=10,
-          )
-          msg.raise_for_status()
-          print("TELEGRAM_HEALTH_OK commands=ping,status,order")
+          print("TELEGRAM_COMMANDS_OK commands=ping,status,order")
           PY
 
-          sudo systemctl is-active --quiet "$SERVICE_NAME"
           RECENT="$(sudo journalctl -u "$SERVICE_NAME" --since '-3 minutes' --no-pager || true)"
           if printf '%s\n' "$RECENT" | grep -E 'Traceback \(most recent call last\)|CRITICAL|Unhandled exception' >/dev/null; then
             echo 'Recent fatal-looking exception detected in cci_bot log' >&2
             printf '%s\n' "$RECENT" | tail -80 >&2
-            exit 30
+            false
           fi
-          echo 'POST_DEPLOY_HEALTH_OK'
+
+          venv/bin/python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          r = requests.post(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              json={
+                  "chat_id": chat_id,
+                  "text": "✅ CCI v4.0.1 운영배포 완료\n- exact source SHA 검증\n- systemd active 이중 확인\n- Toss NVDL/USD 및 OPEN 주문 read-only 조회 정상\n- /ping /status /order 명령 등록 확인\n- 최근 fatal 예외 없음",
+              },
+              timeout=10,
+          )
+          r.raise_for_status()
+          print("TELEGRAM_NOTIFY_OK")
+          PY
+
+          mv "$OLD_DIR" "$BACKUP_DIR/source_predeploy"
+          SWAPPED=0
+          rm -f "$PRIVATE_KEY"
+          cleanup_transfer
+          trap - ERR
+          echo "CCI_DEPLOY_OK commit=$EXPECTED_SHA backup=$BACKUP_DIR one_time_key_removed=true"
           REMOTE
+
+      - name: Remove temporary public encrypted payload branch
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          gh api -X DELETE "repos/$GH_REPO/git/refs/heads/ops/cci-v4.0.1-encrypted-payload"
 
       - name: Report deployment result
         if: always() && github.event_name == 'issues'
@@ -248,8 +308,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$JOB_STATUS" == "success" ]]; then
-            body="✅ CCI v4.0.1 Oracle 운영배포 성공\n\n정확한 CCI main 커밋 \`2302e8e91d95c945d30dacf48672959858a4fa1a\` 배포, systemd 이중 active 확인, Toss read-only 잔고/OPEN 주문 조회, Telegram command 등록 및 알림 전송, 최근 fatal 예외 점검까지 통과했습니다.\n\nActions: $RUN_URL"
+            body="✅ CCI v4.0.1 Oracle 운영배포 성공\n\n정확한 CCI source 커밋 \`2302e8e91d95c945d30dacf48672959858a4fa1a\` 검증, Oracle 복호화, systemd 이중 active, Toss read-only 잔고/OPEN 주문, Telegram /ping /status /order 등록, 최근 fatal 예외 점검을 모두 통과했습니다. 1회성 Oracle private key와 JH 임시 encrypted payload branch도 폐기했습니다.\n\nActions: $RUN_URL"
           else
-            body="❌ CCI Oracle 운영배포 실패\n\n배포 실패 시 기존 운영 디렉터리 보존 또는 자동 복원을 수행합니다. Actions: $RUN_URL"
+            body="❌ CCI Oracle 운영배포 실패\n\n원자적 배포 트랜잭션이 실패한 경우 기존 운영 디렉터리를 자동 복원하고, 재시도를 위해 1회성 private key는 유지합니다. Actions: $RUN_URL"
           fi
           gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$body")"
