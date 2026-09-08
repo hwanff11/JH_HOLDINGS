@@ -1,0 +1,54 @@
+name: Prepare CCI Payload Key
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-cci-payload-key
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.actor == github.repository_owner &&
+      startsWith(github.event.issue.title, '[prepare-cci-payload-key]')
+    runs-on: ubuntu-latest
+    environment: oracle-dry-run
+    steps:
+      - name: Prepare pinned Oracle SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_cci
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_cci ~/.ssh/known_hosts
+
+      - name: Generate one-time RSA key on Oracle and publish public key only
+        env:
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -Eeuo pipefail
+          PUB_B64="$(ssh -i ~/.ssh/oracle_cci \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" \
+            'set -Eeuo pipefail; KEY=/home/ubuntu/.cci_payload_key_v401.pem; rm -f "$KEY" "$KEY.pub"; umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$KEY" >/dev/null 2>&1; openssl pkey -in "$KEY" -pubout -out "$KEY.pub"; chmod 600 "$KEY" "$KEY.pub"; base64 -w0 "$KEY.pub"')"
+          test -n "$PUB_B64"
+          body="✅ CCI 배포용 1회성 공개키 생성 완료\n\nPrivate key는 Oracle 서버에만 저장됩니다. 아래 공개키만 CCI private repository의 암호화 단계에서 사용합니다.\n\nCCI_PAYLOAD_PUBLIC_KEY_B64:\n\`\`\`text\n$PUB_B64\n\`\`\`"
+          gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$body")"
