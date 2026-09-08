@@ -23,7 +23,7 @@ jobs:
     environment: oracle-dry-run
     steps:
       - name: Checkout encrypted CCI payload only
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ops/cci-v4.0.1-encrypted-payload
           path: payload_repo
