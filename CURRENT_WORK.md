@@ -27,8 +27,10 @@
 ## 2. 최근 완료 상태
 
 - **CCI Swing Bot v4.0.1 운영배포 완료(2026-09-08)**: exact source SHA `2302e8e91d95c945d30dacf48672959858a4fa1a`, Oracle `cci_bot` systemd active, Toss NVDL/USD read-only 및 OPEN 주문 조회, Telegram `/ping`·`/status`·`/order` 핸들러와 운영 알림, 최근 fatal 예외 점검을 모두 통과
-- CCI Oracle runtime은 **managed CPython 3.12.13**으로 배포되었고, JH_HOLDINGS의 CCI reusable release gate도 **Python 3.12** 기준으로 표준화
+- CCI Oracle runtime은 **managed CPython 3.12.13**으로 배포됨
 - CCI v4.0.1 1회성 encrypted payload와 Oracle private key는 성공 시 폐기되었으며, 임시 key/patch/encrypted-deploy workflow는 운영 완료 후 제거
+- cross-repository reusable deploy는 CCI 호출 시 JH Environment secret이 상속되지 않는 GitHub 저장소 경계를 실검증한 뒤 **폐기**. JH Oracle secret을 CCI 저장소에 중복 저장하지 않는 원칙 유지
+- CCI 자동배포는 fail-closed로 제거하고, CCI 저장소의 `deploy.sh`를 managed Python 3.12 staging venv/rollback 방식으로 유지하며 신뢰 실행환경에서만 배포하도록 운영 경계를 확정
 - 첫 운용 승인·주문감시 안전강화와 Telegram 개선: 운영 반영 완료
 - 검증된 DB 연결·트랜잭션 개선의 배포 호환성: 운영 반영 완료
 - 알림 전송 실패와 주문감시 분리, 예상하지 못한 감시 오류의 BUY 차단 및 재점검
@@ -62,6 +64,6 @@
 
 ## 4. 문서와 runtime 관계
 
-상태문서 정리는 JH AUTO 전략·주문·DB·Oracle runtime 동작을 변경하지 않습니다. CCI 관련 이번 정리는 별도 CCI 서비스의 상시 배포 게이트를 Python 3.12 기준으로 표준화하고, 이미 완료된 v4.0.1 1회성 배포 자산을 제거하는 작업입니다.
+상태문서 정리는 JH AUTO 전략·주문·DB·Oracle runtime 동작을 변경하지 않습니다. CCI는 별도 저장소/서비스이며, 이번 작업으로 JH_HOLDINGS에 남아 있던 CCI 1회성 및 cross-repository 배포 workflow를 모두 정리했습니다. CCI 배포 절차와 보안 경계는 CCI 저장소 `docs/OPERATIONS.md`를 기준으로 관리합니다.
 
 완료된 과거 작업의 상세는 [`docs/HISTORY.md`](docs/HISTORY.md), 병합 PR, Git tag와 Actions artifact에서 확인합니다.
