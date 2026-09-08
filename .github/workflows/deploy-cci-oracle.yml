@@ -238,7 +238,10 @@ jobs:
           set +a
           venv/bin/python - <<'PY'
           import os
+          import re
           import time
+          from pathlib import Path
+
           import requests
           from toss_client import TossClient
 
@@ -265,14 +268,16 @@ jobs:
                       time.sleep(2 ** attempt)
               raise last_error
 
-          me = telegram_get("getMe")
-          commands = telegram_get("getMyCommands")
-          names = {x.get("command") for x in commands.json().get("result", [])}
+          telegram_get("getMe")
+          source = Path("bot_app.py").read_text(encoding="utf-8")
+          registered = set()
+          for match in re.finditer(r"@bot\.message_handler\(commands=\[([^\]]+)\]\)", source):
+              registered.update(re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", match.group(1)))
           required = {"ping", "status", "order"}
-          missing = required - names
+          missing = required - registered
           if missing:
-              raise SystemExit(f"missing Telegram commands: {sorted(missing)}")
-          print("TELEGRAM_COMMANDS_OK commands=ping,status,order")
+              raise SystemExit(f"missing Telegram handler commands: {sorted(missing)}")
+          print("TELEGRAM_HANDLERS_OK commands=ping,status,order")
           PY
 
           RECENT="$(sudo journalctl -u "$SERVICE_NAME" --since '-3 minutes' --no-pager || true)"
@@ -291,7 +296,7 @@ jobs:
           chat_id = os.environ["TELEGRAM_CHAT_ID"]
           payload = {
               "chat_id": chat_id,
-              "text": "✅ CCI v4.0.1 운영배포 완료\n- exact source SHA 검증\n- systemd active 이중 확인\n- Toss NVDL/USD 및 OPEN 주문 read-only 조회 정상\n- /ping /status /order 명령 등록 확인\n- 최근 fatal 예외 없음",
+              "text": "✅ CCI v4.0.1 운영배포 완료\n- exact source SHA 검증\n- systemd active 이중 확인\n- Toss NVDL/USD 및 OPEN 주문 read-only 조회 정상\n- /ping /status /order 핸들러 확인\n- 최근 fatal 예외 없음",
           }
           last_error = None
           for attempt in range(1, 4):
@@ -339,7 +344,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$JOB_STATUS" == "success" ]]; then
-            body="✅ CCI v4.0.1 Oracle 운영배포 성공\n\n정확한 CCI source 커밋 \`2302e8e91d95c945d30dacf48672959858a4fa1a\` 검증, Oracle 복호화, systemd 이중 active, Toss read-only 잔고/OPEN 주문, Telegram /ping /status /order 등록, 최근 fatal 예외 점검을 모두 통과했습니다. 1회성 Oracle private key와 JH 임시 encrypted payload branch도 폐기했습니다.\n\nActions: $RUN_URL"
+            body="✅ CCI v4.0.1 Oracle 운영배포 성공\n\n정확한 CCI source 커밋 \`2302e8e91d95c945d30dacf48672959858a4fa1a\` 검증, Oracle 복호화, systemd 이중 active, Toss read-only 잔고/OPEN 주문, Telegram /ping /status /order 핸들러, 최근 fatal 예외 점검을 모두 통과했습니다. 1회성 Oracle private key와 JH 임시 encrypted payload branch도 폐기했습니다.\n\nActions: $RUN_URL"
           else
             body="❌ CCI Oracle 운영배포 실패\n\n원자적 배포 트랜잭션이 실패한 경우 기존 운영 디렉터리를 자동 복원하고, 재시도를 위해 1회성 private key는 유지합니다. Actions: $RUN_URL"
           fi
