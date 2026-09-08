@@ -1,0 +1,74 @@
+name: Deploy CCI Swing Bot Reusable
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-cci-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: oracle-dry-run
+    steps:
+      - name: Checkout caller repository at exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify CCI deployment contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REPOSITORY" = "hwanff11/cci_nvdl"
+          test -f bot_main.py
+          test -f runtime_hardening.py
+          test -f strategy_engine.py
+          test -f deploy.sh
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Run release gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pip install -r requirements.txt
+          python -m py_compile bot_main.py bot_app.py runtime_hardening.py strategy_engine.py indicator.py toss_client.py state_manager.py
+          python -m unittest discover -s tests -v
+
+      - name: Prepare pinned Oracle SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_cci
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_cci ~/.ssh/known_hosts
+
+      - name: Deploy CCI and verify systemd health
+        env:
+          SSH_KEY: /home/runner/.ssh/oracle_cci
+          SERVER_IP: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          TARGET_DIR: /home/ubuntu/cci_nvdl
+          SERVICE_NAME: cci_bot
+          SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ./deploy.sh
