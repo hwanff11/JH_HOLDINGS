@@ -165,8 +165,14 @@ jobs:
             test -f "$STAGE_DIR/$f" || { echo "Required deployment file missing: $f"; false; }
           done
 
-          python3 -m venv "$STAGE_DIR/venv"
-          "$STAGE_DIR/venv/bin/pip" install --disable-pip-version-check -q -r "$STAGE_DIR/requirements.txt"
+          UV_BIN="$HOME/.local/bin/uv"
+          if [[ ! -x "$UV_BIN" ]]; then
+            python3 -m pip install --user --disable-pip-version-check --no-warn-script-location "uv==0.12.10"
+          fi
+          export UV_PYTHON_INSTALL_DIR="$HOME/.local/share/uv/python"
+          "$UV_BIN" python install 3.12
+          "$UV_BIN" venv --python 3.12 "$STAGE_DIR/venv"
+          "$UV_BIN" pip install --python "$STAGE_DIR/venv/bin/python" -r "$STAGE_DIR/requirements.txt"
           "$STAGE_DIR/venv/bin/python" -m py_compile \
             "$STAGE_DIR/bot_main.py" "$STAGE_DIR/bot_app.py" \
             "$STAGE_DIR/runtime_hardening.py" "$STAGE_DIR/strategy_engine.py" \
