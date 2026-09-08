@@ -1,0 +1,224 @@
+name: Deploy CCI Oracle
+
+on:
+  workflow_dispatch:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-cci-live-update
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.actor == github.repository_owner &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && startsWith(github.event.issue.title, '[deploy-cci-oracle]')))
+    runs-on: ubuntu-latest
+    environment: oracle-dry-run
+    steps:
+      - name: Prepare pinned Oracle SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_cci
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_cci ~/.ssh/known_hosts
+
+      - name: Deploy exact CCI main from existing server git clone
+        env:
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          EXPECTED_SHA: 2302e8e91d95c945d30dacf48672959858a4fa1a
+          TARGET_DIR: /home/ubuntu/cci_nvdl
+          SERVICE_NAME: cci_bot
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/oracle_cci \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=10 \
+            "$SERVER_USER@$SERVER_HOST" \
+            bash -s -- "$TARGET_DIR" "$SERVICE_NAME" "$EXPECTED_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          TARGET_DIR="$1"
+          SERVICE_NAME="$2"
+          EXPECTED_SHA="$3"
+          cd "$TARGET_DIR"
+
+          test -d .git || { echo 'CCI target is not a git clone'; exit 20; }
+          test -f .env || { echo 'CCI runtime .env missing'; exit 21; }
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo '.env must remain untracked'; exit 22
+          fi
+
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          STAMP="$(date +%Y%m%d_%H%M%S)"
+          BACKUP_DIR="$TARGET_DIR/.deploy_backups/$STAMP"
+          mkdir -p "$BACKUP_DIR"
+          cp .env "$BACKUP_DIR/.env"
+          for f in state.db state.db-wal state.db-shm bot.log; do
+            [[ ! -f "$f" ]] || cp "$f" "$BACKUP_DIR/$f"
+          done
+          printf '%s\n' "$CURRENT_SHA" > "$BACKUP_DIR/previous_commit.txt"
+
+          rollback() {
+            rc=$?
+            echo "Deployment failed (rc=$rc). Rolling code back to $CURRENT_SHA" >&2
+            git checkout --force "$CURRENT_SHA" >/dev/null 2>&1 || true
+            [[ ! -f "$BACKUP_DIR/.env" ]] || cp "$BACKUP_DIR/.env" .env
+            if [[ -f requirements.txt ]]; then
+              python3 -m venv venv || true
+              venv/bin/pip install --disable-pip-version-check -q -r requirements.txt || true
+            fi
+            sudo systemctl restart "$SERVICE_NAME" || true
+            sudo systemctl --no-pager --full status "$SERVICE_NAME" | head -25 || true
+            exit "$rc"
+          }
+          trap rollback ERR
+
+          git fetch --no-tags origin main
+          FETCHED_SHA="$(git rev-parse origin/main)"
+          test "$FETCHED_SHA" = "$EXPECTED_SHA" || {
+            echo "origin/main mismatch: expected=$EXPECTED_SHA fetched=$FETCHED_SHA"; false;
+          }
+          git checkout --force "$EXPECTED_SHA"
+
+          python3 -m venv venv
+          venv/bin/pip install --disable-pip-version-check -q -r requirements.txt
+          venv/bin/python -m py_compile \
+            bot_main.py bot_app.py runtime_hardening.py strategy_engine.py \
+            indicator.py toss_client.py state_manager.py
+
+          cat > "/tmp/${SERVICE_NAME}.service" <<EOF
+          [Unit]
+          Description=JH Holdings CCI Trading Bot
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=$(id -un)
+          WorkingDirectory=${TARGET_DIR}
+          EnvironmentFile=${TARGET_DIR}/.env
+          ExecStart=${TARGET_DIR}/venv/bin/python3 -u ${TARGET_DIR}/bot_main.py
+          Restart=always
+          RestartSec=5
+          TimeoutStopSec=20
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          sudo mv "/tmp/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+          sudo systemctl daemon-reload
+          sudo systemctl enable "$SERVICE_NAME" >/dev/null
+          sudo systemctl restart "$SERVICE_NAME"
+          sleep 6
+          sudo systemctl is-active --quiet "$SERVICE_NAME"
+          sleep 6
+          sudo systemctl is-active --quiet "$SERVICE_NAME"
+
+          RUNNING_MAIN="$(tr '\0' ' ' < /proc/$(systemctl show -p MainPID --value "$SERVICE_NAME")/cmdline)"
+          case "$RUNNING_MAIN" in
+            *"$TARGET_DIR/bot_main.py"*) ;;
+            *) echo "unexpected process command: $RUNNING_MAIN"; false ;;
+          esac
+
+          trap - ERR
+          echo "CCI_DEPLOY_OK commit=$EXPECTED_SHA backup=$BACKUP_DIR"
+          REMOTE
+
+      - name: Verify broker read-only health and Telegram command registration
+        env:
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          TARGET_DIR: /home/ubuntu/cci_nvdl
+          SERVICE_NAME: cci_bot
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/oracle_cci \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" \
+            bash -s -- "$TARGET_DIR" "$SERVICE_NAME" <<'REMOTE'
+          set -Eeuo pipefail
+          TARGET_DIR="$1"
+          SERVICE_NAME="$2"
+          cd "$TARGET_DIR"
+          set -a
+          . ./.env
+          set +a
+
+          venv/bin/python - <<'PY'
+          import os
+          import requests
+          from toss_client import TossClient
+
+          c = TossClient()
+          c.authenticate()
+          for symbol in ("NVDL", "USD"):
+              c.get_account_balances(symbol)
+          open_orders = c.get_orders(status="OPEN", limit=100)
+          print(f"BROKER_READ_OK open_orders={len(open_orders)}")
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          base = f"https://api.telegram.org/bot{token}"
+          me = requests.get(f"{base}/getMe", timeout=10)
+          me.raise_for_status()
+          commands = requests.get(f"{base}/getMyCommands", timeout=10)
+          commands.raise_for_status()
+          names = {x.get("command") for x in commands.json().get("result", [])}
+          required = {"ping", "status", "order"}
+          missing = required - names
+          if missing:
+              raise SystemExit(f"missing Telegram commands: {sorted(missing)}")
+          msg = requests.post(
+              f"{base}/sendMessage",
+              json={
+                  "chat_id": chat_id,
+                  "text": "✅ CCI v4.0.1 운영배포 및 서버 헬스체크 완료\n- systemd active\n- Toss read-only 조회 정상\n- /ping /status /order 명령 등록 확인",
+              },
+              timeout=10,
+          )
+          msg.raise_for_status()
+          print("TELEGRAM_HEALTH_OK commands=ping,status,order")
+          PY
+
+          sudo systemctl is-active --quiet "$SERVICE_NAME"
+          RECENT="$(sudo journalctl -u "$SERVICE_NAME" --since '-3 minutes' --no-pager || true)"
+          if printf '%s\n' "$RECENT" | grep -E 'Traceback \(most recent call last\)|CRITICAL|Unhandled exception' >/dev/null; then
+            echo 'Recent fatal-looking exception detected in cci_bot log' >&2
+            printf '%s\n' "$RECENT" | tail -80 >&2
+            exit 30
+          fi
+          echo 'POST_DEPLOY_HEALTH_OK'
+          REMOTE
+
+      - name: Report deployment result
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$JOB_STATUS" == "success" ]]; then
+            body="✅ CCI v4.0.1 Oracle 운영배포 성공\n\n정확한 CCI main 커밋 \`2302e8e91d95c945d30dacf48672959858a4fa1a\` 배포, systemd 이중 active 확인, Toss read-only 잔고/OPEN 주문 조회, Telegram command 등록 및 알림 전송, 최근 fatal 예외 점검까지 통과했습니다.\n\nActions: $RUN_URL"
+          else
+            body="❌ CCI Oracle 운영배포 실패\n\n배포 실패 시 이전 Git commit으로 자동 rollback을 시도합니다. Actions: $RUN_URL"
+          fi
+          gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$body")"
