@@ -238,6 +238,7 @@ jobs:
           set +a
           venv/bin/python - <<'PY'
           import os
+          import time
           import requests
           from toss_client import TossClient
 
@@ -249,10 +250,23 @@ jobs:
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
           base = f"https://api.telegram.org/bot{token}"
-          me = requests.get(f"{base}/getMe", timeout=10)
-          me.raise_for_status()
-          commands = requests.get(f"{base}/getMyCommands", timeout=10)
-          commands.raise_for_status()
+
+          def telegram_get(method: str):
+              last_error = None
+              for attempt in range(1, 4):
+                  try:
+                      response = requests.get(f"{base}/{method}", timeout=(5, 30))
+                      response.raise_for_status()
+                      return response
+                  except requests.RequestException as exc:
+                      last_error = exc
+                      if attempt == 3:
+                          break
+                      time.sleep(2 ** attempt)
+              raise last_error
+
+          me = telegram_get("getMe")
+          commands = telegram_get("getMyCommands")
           names = {x.get("command") for x in commands.json().get("result", [])}
           required = {"ping", "status", "order"}
           missing = required - names
@@ -270,20 +284,31 @@ jobs:
 
           venv/bin/python - <<'PY'
           import os
+          import time
           import requests
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
           chat_id = os.environ["TELEGRAM_CHAT_ID"]
-          r = requests.post(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              json={
-                  "chat_id": chat_id,
-                  "text": "✅ CCI v4.0.1 운영배포 완료\n- exact source SHA 검증\n- systemd active 이중 확인\n- Toss NVDL/USD 및 OPEN 주문 read-only 조회 정상\n- /ping /status /order 명령 등록 확인\n- 최근 fatal 예외 없음",
-              },
-              timeout=10,
-          )
-          r.raise_for_status()
-          print("TELEGRAM_NOTIFY_OK")
+          payload = {
+              "chat_id": chat_id,
+              "text": "✅ CCI v4.0.1 운영배포 완료\n- exact source SHA 검증\n- systemd active 이중 확인\n- Toss NVDL/USD 및 OPEN 주문 read-only 조회 정상\n- /ping /status /order 명령 등록 확인\n- 최근 fatal 예외 없음",
+          }
+          last_error = None
+          for attempt in range(1, 4):
+              try:
+                  r = requests.post(
+                      f"https://api.telegram.org/bot{token}/sendMessage",
+                      json=payload,
+                      timeout=(5, 30),
+                  )
+                  r.raise_for_status()
+                  print("TELEGRAM_NOTIFY_OK")
+                  break
+              except requests.RequestException as exc:
+                  last_error = exc
+                  if attempt == 3:
+                      raise
+                  time.sleep(2 ** attempt)
           PY
 
           mv "$OLD_DIR" "$BACKUP_DIR/source_predeploy"
