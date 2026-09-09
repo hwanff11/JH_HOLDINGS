@@ -1,0 +1,44 @@
+name: QLD Only Final Robustness
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_qld_only_phase13_final_robustness.py"
+      - "scripts/research_qld_only_vol_phase12_neighborhood.py"
+      - ".github/workflows/qld-only-final-robustness.yml"
+      - "scripts/research_qld_sso_alpha.py"
+      - "scripts/research_qld_sso_vs_v322.py"
+      - "strategy.yaml"
+      - "src/**"
+  workflow_dispatch:
+
+jobs:
+  final-robustness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: |
+          ruff check scripts/research_qld_only_phase13_final_robustness.py \
+            scripts/research_qld_only_vol_phase12_neighborhood.py \
+            scripts/research_qld_sso_alpha.py \
+            scripts/research_qld_sso_vs_v322.py
+      - name: Run Phase 13 fixed candidate robustness
+        run: |
+          python scripts/research_qld_only_phase13_final_robustness.py \
+            --output-json reports/qld-only-phase13.json \
+            --output-md reports/qld-only-phase13.md
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: qld-only-phase13
+          path: |
+            reports/qld-only-phase13.json
+            reports/qld-only-phase13.md
