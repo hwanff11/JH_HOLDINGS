@@ -1,0 +1,53 @@
+name: JDSS V3.3 Rebalance Frequency Research
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_v33_rebalance_frequency.py"
+      - ".github/workflows/v33-rebalance-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    name: V3.3 Frequency Sweep
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run V3.3 rebalance-frequency sweep
+        run: |
+          set -Eeuo pipefail
+          mkdir -p reports
+          python scripts/research_v33_rebalance_frequency.py \
+            --output-json reports/v33-rebalance-frequency.json \
+            --output-md reports/v33-rebalance-frequency.md
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [[ -f reports/v33-rebalance-frequency.md ]]; then
+            cat reports/v33-rebalance-frequency.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload research artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: v33-rebalance-frequency-${{ github.run_id }}
+          path: reports/v33-rebalance-frequency.*
+          if-no-files-found: warn
