@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -52,12 +53,33 @@ class PortfolioBacktestResult:
 class PortfolioBacktestEngine:
     """Production-equivalent V3.2.2 shared-account simulation."""
 
-    def __init__(self, config: StrategyConfig) -> None:
+    def __init__(
+        self,
+        config: StrategyConfig,
+        *,
+        policy: V322Policy | None = None,
+        risk_budget: Callable[[float, float, float], float] | None = None,
+        strategy_version: str | None = None,
+        profit_reinvestment: str = "HWM75_CONTROLLED",
+        apply_initial_onboarding: bool = True,
+    ) -> None:
         if not config.portfolio.enabled:
             raise ValueError("포트폴리오 백테스트는 portfolio.enabled가 필요합니다")
         self.config = config
-        self.policy = V322Policy.from_config(config)
+        self.policy = policy or V322Policy.from_config(config)
         self.onboarding_policy = InitialOnboardingPolicy.from_config(config)
+        self.risk_budget = risk_budget or self._hwm75_risk_budget
+        self.strategy_version = strategy_version or config.version
+        self.profit_reinvestment = profit_reinvestment
+        self.apply_initial_onboarding = apply_initial_onboarding
+
+    def _hwm75_risk_budget(
+        self, initial_capital: float, high_water: float, current_equity: float
+    ) -> float:
+        budget = initial_capital + float(self.policy.hwm_reinvestment_fraction) * max(
+            0.0, high_water - initial_capital
+        )
+        return max(0.0, min(budget, current_equity))
 
     def run(
         self,
@@ -143,10 +165,9 @@ class PortfolioBacktestEngine:
                 quantities[symbol] * opens[symbol] * (1 - sell_fee)
                 for symbol in ALLOCATION_SYMBOLS
             )
-            sizing_equity = initial_capital + float(
-                self.policy.hwm_reinvestment_fraction
-            ) * max(0.0, high_water - initial_capital)
-            sizing_equity = max(0.0, min(sizing_equity, open_equity))
+            sizing_equity = self.risk_budget(
+                initial_capital, high_water, open_equity
+            )
 
             if pending != current:
                 onboarding_stage = None
@@ -208,7 +229,7 @@ class PortfolioBacktestEngine:
         return PortfolioBacktestResult(
             sessions[0].date(),
             sessions[-1].date(),
-            self.config.version,
+            self.strategy_version,
             self.config.config_version,
             slip,
             metrics,
@@ -238,7 +259,7 @@ class PortfolioBacktestEngine:
         of US sessions.  Target reductions still flow through immediately.
         """
         policy = self.onboarding_policy
-        if not policy.enabled:
+        if not self.apply_initial_onboarding or not policy.enabled:
             return target
         interval = policy.minimum_sessions_between_stages
         if interval == 0:
@@ -408,10 +429,12 @@ class PortfolioBacktestEngine:
             "maximum_sizing_base": round(max(sizing_history), 2),
             "final_sizing_base": round(sizing_history[-1], 2),
             "hwm_reinvestment_fraction": float(self.policy.hwm_reinvestment_fraction),
-            "profit_reinvestment": "HWM75_CONTROLLED",
+            "profit_reinvestment": self.profit_reinvestment,
             "idle_cash_enabled": False,
             "idle_cash_income": 0.0,
-            "initial_onboarding_enabled": self.onboarding_policy.enabled,
+            "initial_onboarding_enabled": (
+                self.onboarding_policy.enabled and self.apply_initial_onboarding
+            ),
             "initial_onboarding_fractions_pct": [
                 float(fraction * 100)
                 for fraction in self.onboarding_policy.cumulative_fractions
