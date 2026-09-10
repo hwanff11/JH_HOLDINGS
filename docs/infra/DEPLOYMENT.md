@@ -13,7 +13,7 @@
 
 세 사건을 서로 대신하지 않습니다.
 
-## 1. 운영 상태를 구분합니다
+## 1. 운영 상태 구분
 
 | 상태 | 의미 | 신규 AUTO BUY |
 |---|---|---|
@@ -24,17 +24,36 @@
 
 `live_commissioned=1`과 `launch_authorized=1`은 같은 뜻이 아닙니다.
 
-## 2. 운영 모드별 배포 경로
+## 2. 표준 Production 배포 경로
 
 ### DRY-RUN
 
-실거래 commissioning 전 모의운용 서버 갱신은 표준 dry-run 배포 경로를 사용합니다.
+실거래 commissioning 전 모의운용 서버 갱신은 표준 dry-run 배포경로를 사용합니다.
 
 ### LIVE-ARMED / JH AUTO
 
-실계좌와 실거래 DB가 이미 준비된 운영환경은 live-safe 배포경로만 사용합니다. 이 경로는 기존 실계좌 연결·실거래 DB·운영자 halt latch를 보존하고 서비스 교체 전에 신규 BUY 저수준 잠금을 먼저 겁니다.
+실계좌와 실거래 DB가 이미 준비된 운영환경은 live-safe 배포경로만 사용합니다. 기존 실계좌 연결·실거래 DB·운영자 halt latch를 보존하고 서비스 교체 전에 신규 BUY 저수준 잠금을 먼저 겁니다.
 
 배포 workflow가 `/auto start`, `/resume`, 운용 기준자금 변경, 자동운용비율 변경을 수행하면 안 됩니다.
+
+### ChatGPT owner-only Issue ChatOps
+
+사용자가 대화에서 **“배포해”, “배포까지”, “끝까지 마무리”**라고 명확히 승인한 runtime 변경은 사용자의 PC/터미널 연결 없이 ChatGPT가 GitHub Issue ChatOps로 끝까지 처리하는 것이 기본입니다.
+
+```text
+필수 PR CI PASS
+→ main merge
+→ owner가 [deploy-oracle-live-armed] 제목의 Issue 생성
+→ workflow가 exact 최신 main 확인
+→ 배포 전 BUY halt ON + 재확인
+→ Live-Armed 안전배포
+→ runtime/DB/reconciliation/Toss read-only/Telegram smoke
+→ 별도 [oracle-health-check] Issue
+→ 외부 service/SQLite/scheduler/config health 확인
+→ 성공 Issue 정리
+```
+
+배포/health workflow 실패나 새 회귀가 발견되면 ChatGPT는 이미 승인된 배포 범위 안에서 원인을 수정하고 **branch → CI → merge → 재배포 → health**를 성공할 때까지 반복합니다. merge만 성공한 상태를 완료로 보고하지 않습니다.
 
 ## 3. 최초 실계좌 연결 원칙
 
@@ -43,7 +62,7 @@
 필수 확인:
 
 - 모의운용 DB를 실거래 DB로 재사용하지 않음
-- 관리종목 QQQ/TQQQ/SOXL의 초기 보유상태를 명시적으로 확인
+- 관리종목 QQQ/TQQQ/SOXL의 초기 보유상태 명시 확인
 - 관리종목 미체결 주문 0
 - 실제 USD buying power 정상
 - Toss 실제 계좌와 새 live 원장 대조 정상
@@ -52,7 +71,7 @@
 - JH AUTO 최초 시작승인 OFF
 - 현재 허용원금 0
 
-QQQ/TQQQ/SOXL 외 비관리 종목이 같은 계좌에 있을 수는 있지만 JH AUTO 목표·HWM·자동 SELL에 자동 포함하지 않습니다. 다만 계좌 공용 buying power를 사용하므로 비관리 거래가 현금을 소비하면 AUTO BUY 가능액이 줄거나 차단될 수 있습니다.
+QQQ/TQQQ/SOXL 외 비관리 종목이 같은 계좌에 있을 수는 있지만 JH AUTO 목표·HWM·자동 SELL에 자동 포함하지 않습니다. 계좌 공용 buying power를 사용하므로 비관리 거래가 현금을 소비하면 AUTO BUY 가능액이 줄거나 차단될 수 있습니다.
 
 commissioning 이후 관리종목을 Toss 앱에서 JH AUTO와 동시에 수동매매하지 않는 것이 운영 원칙입니다.
 
@@ -75,7 +94,7 @@ LIVE-ARMED 배포 완료
 → 모두 정상일 때만 첫 AUTO BUY 가능
 ```
 
-정확한 자금개방 단계와 시작승인 계약은 `JH_AUTO_SPEC.md`가 소유합니다. 이 배포문서는 해당 계약을 중복 정의하지 않습니다.
+정확한 자금개방 단계와 시작승인 계약은 `JH_AUTO_SPEC.md`가 소유합니다.
 
 ## 5. 배포 전 필수 게이트
 
@@ -87,7 +106,7 @@ LIVE-ARMED 배포 완료
 - Quality Gate PASS
 - Security Gate PASS
 - 전략·백테스트 영향이 있으면 canonical Backtest PASS
-- `jdss validate-config` PASS
+- config validation PASS
 - 주문·DB·AUTO 변경이면 관련 집중테스트 PASS
 
 ### LIVE runtime
@@ -108,19 +127,17 @@ LIVE-ARMED 배포 완료
 
 schema/config version이 바뀌면 일반 코드 업데이트로 취급하지 않고 migration·호환성·rollback 계획을 먼저 검증합니다.
 
-## 6. SSH 신뢰경계
+## 6. SSH 및 인증 신뢰경계
 
 - `StrictHostKeyChecking=yes`
-- 사전에 검증된 host public key만 `known_hosts`로 사용
-- Actions 실행 중 `ssh-keyscan` 결과를 즉석 신뢰하지 않음
-- `accept-new` 금지
-- host key가 바뀌면 원인 확인 전 배포 중단
+- 사전에 검증된 host public key만 사용
+- Actions 실행 중 새 host key를 즉석 신뢰하지 않음
+- host key 변경 시 원인 확인 전 배포 중단
+- API key·token·계좌번호·SSH private key를 로그나 Issue에 기록하지 않음
 
-실제 서버 절대경로·OS 사용자명·서비스 실명·secret·실제 backup 파일명은 공개 Markdown에 기록하지 않습니다.
+Toss client-credentials는 실행 중인 다른 프로세스와 충돌할 수 있으므로 외부 LIVE health checker가 독립 token issuer가 되어서는 안 됩니다. 외부 health에서는 service/DB/config/scheduler 상태를 검증하고 Toss token 발급은 생략합니다. LIVE runtime 내부의 read-only smoke는 shared token 경계를 따릅니다.
 
 ## 7. LIVE 배포 순서
-
-논리적 순서는 다음과 같습니다.
 
 ```text
 최신 main 확인
@@ -150,11 +167,52 @@ schema/config version이 바뀌면 일반 코드 업데이트로 취급하지 �
 - 운영자 `/halt` latch 삭제
 - UNKNOWN 주문을 성공/실패로 추정
 
-## 8. 배포 후 상태 판정
+## 8. 일시적 provider 장애와 SAFE_MODE 경계
+
+### 명확한 read-only 일시장애
+
+holdings, OPEN orders, 이미 식별된 주문상태 같은 GET이 `token-revoked`, expired/invalid token, retryable 429/timeout/5xx 등으로 실패했지만 **상반된 실제 broker 상태가 관찰되지 않은 경우**에는 원장 손상으로 단정하지 않습니다.
+
+```text
+bounded GET retry
+→ 계속 실패하면 신규 BUY 임시격리
+→ read 정상화
+→ canonical reconciliation 2회 연속 PASS
+→ 다른 안전조건이 정상일 때 system quarantine 자동복구
+→ 다음 독립 안전주기에서만 위험증가 가능
+```
+
+### 구조적 불일치
+
+GET이 정상 응답한 뒤 다음이 확인되면 sticky SAFE_MODE를 유지합니다.
+
+- 실제 broker 수량과 원장 불일치
+- UNKNOWN 주문
+- 주문 identity/상태 불일치
+- 자동으로 안전함을 증명할 수 없는 execution state
+
+이 경우 자동으로 `/resume`하지 않습니다.
+
+### write-path
+
+계좌상태를 바꾸는 주문/취소 POST에는 **blind retry**를 하지 않습니다. timeout, receipt 불명확, 인증실패 뒤 성공여부가 불명확하면 신규 BUY를 막고 실제 주문상태를 확인합니다.
+
+## 9. 일일 시세 provider 장애
+
+07:00 일일 분석 시 최신 완료 일봉을 확보하지 못하면 전일 stale 데이터를 오늘 데이터처럼 사용하지 않습니다.
+
+- 신규 BUY 임시 차단
+- 5 → 10 → 15 → 30 → 60분 bounded backoff
+- 이후 장애 지속 시 60분 간격 재확인
+- 동일 장애 알림 반복 억제
+- 복구 완료 알림 1회
+- 당일 분석 완료 전 전일 BUY 후보 실행 금지
+
+Toss daily candle은 조정주가·분할·전략 parity가 별도로 검증되기 전 LIVE 전략 fallback으로 자동 활성화하지 않습니다.
+
+## 10. 배포 후 상태 판정
 
 ### 최초 시작승인 전
-
-배포 후에도 반드시:
 
 ```text
 launch_authorized = 0
@@ -166,66 +224,30 @@ launch_authorized = 0
 
 ### 이미 최초 시작승인 후
 
-서비스 재시작 시 먼저 BUY 잠금과 startup quarantine을 적용합니다.
+서비스 재시작 시 먼저 BUY 잠금과 startup quarantine을 적용합니다. 자동복귀하려면 기존 시작승인 보존, 운영자 `/halt` OFF, SAFE_MODE 없음, 미체결/UNKNOWN 없음, 계좌·원장 대조 정상, runtime/config 정상임을 새로 증명해야 합니다.
 
-이후 시스템이 자동복귀하려면 최소 다음을 새로 증명해야 합니다.
+### 운영자 `/halt`
 
-- 기존 `launch_authorized=1` 보존
-- 운영자 `/halt` latch OFF
-- SAFE_MODE 없음
-- 미체결/UNKNOWN 없음
-- 계좌·원장 대조 정상
-- runtime/config/strategy generation 정상
+배포 전 운영자 `/halt`가 ON이었다면 새 release에서도 그대로 ON이어야 하며 시스템이 자동해제하면 안 됩니다.
 
-배포 workflow가 halt를 미리 풀어주는 것이 아닙니다.
+## 11. 프로세스 재시작과 rollback
 
-### 운영자 `/halt` 상태
-
-배포 전 운영자 `/halt`가 ON이었다면 새 release에서도 그대로 ON이어야 하며 시스템이 자동복귀하면 안 됩니다.
-
-## 9. 프로세스 재시작
-
-실거래 service 시작·재시작 시:
-
-1. 동일 live 원장에 두 runtime이 붙지 못하도록 실행잠금
-2. JH AUTO bootstrap
-3. 신규 BUY 안전화
-4. 미반영 체결 복구
-5. startup quarantine
-6. 계좌·원장 대조
-7. 이미 최초 시작승인이 있고 모든 자동복귀 조건이 정상일 때만 임시격리 해제
-
-재시작은 최초 사용자 시작승인을 만들지 않고 운영자 `/halt` latch를 해제하지 않습니다.
-
-## 10. DB snapshot과 rollback
+실거래 service 시작·재시작 시 동일 live 원장 중복 runtime을 막고, 신규 BUY 안전화 → 미반영 체결 복구 → startup quarantine → 계좌·원장 대조 순서를 따릅니다.
 
 ### 새 service 시작 전 실패
 
-새 runtime이 실제 주문·상태변경을 시작하기 전에 실패하면 검증된 이전 release와 일관된 DB snapshot으로 rollback할 수 있습니다.
+검증된 이전 release와 일관된 DB snapshot으로 rollback할 수 있습니다.
 
 ### 새 service 시작 후 상태변경 가능성이 생긴 뒤 실패
 
-실제 주문·체결·자금상태가 변할 수 있는 구간에서는 DB를 과거 snapshot으로 무조건 되감지 않습니다. 먼저 실제 Toss 주문·보유와 현재 원장을 대조하고, 데이터 손실 없는 복구경로를 선택합니다.
+실제 주문·체결·자금상태가 변할 수 있으므로 DB를 과거 snapshot으로 무조건 되감지 않습니다. 먼저 실제 Toss 주문·보유와 현재 원장을 대조하고 데이터 손실 없는 복구경로를 선택합니다.
 
 원칙:
 
 - 소스 rollback과 DB rollback을 같은 의미로 보지 않음
 - broker 실제 상태보다 과거 DB snapshot을 우선하지 않음
 - UNKNOWN/open order가 있으면 rollback 전에 실제 상태 확인
-- 복구 후에도 startup quarantine과 계좌·원장 대조를 다시 수행
-
-## 11. 주문 write-path 장애
-
-계좌상태를 바꾸는 POST·취소 요청에는 blind retry를 하지 않습니다.
-
-- POST timeout
-- broker receipt 불명확
-- cancel 결과 불명확
-- broker/DB 주문 불일치
-
-에서는 성공/실패를 추정하지 않고 신규 BUY를 막은 뒤 실제 주문상태를 확인합니다.
-
-조회전용 GET의 명확한 일시오류만 제한적으로 재시도할 수 있습니다.
+- 복구 후에도 startup quarantine과 계좌·원장 대조 재수행
 
 ## 12. 오래된 미체결·부분체결
 
@@ -233,38 +255,28 @@ AUTO BUY가 허용 대기시간을 넘으면 취소를 요청하고 **원주문 
 
 - 확실한 취소 → 실제 체결분 반영 → 다음 주기 목표 재계산
 - 취소여부 불명 → SAFE_MODE / 신규 BUY 차단
-- 부분체결 잔량 → 동일 요청 blind replay 금지
+- 부분체결 잔량 → 동일 요청 blind retry 금지
 
 한 안전주기 신규 BUY 최대건수와 일일 회로차단 상한은 `JH_AUTO_SPEC.md`가 소유합니다.
 
-## 13. 장애 대응 우선순위
+## 13. 배포 후 검증 체크리스트
 
-1. 추가 BUY를 막습니다.
-2. 기존 주문의 실제 상태를 확인합니다.
-3. Toss 보유와 내부 원장을 대조합니다.
-4. 자동으로 증명할 수 없는 상태는 SAFE_MODE로 유지합니다.
-5. 필요하면 운영자가 `/halt`합니다.
-6. 원인이 제거되고 정합성이 증명된 뒤 `/resume` 또는 시스템 자동복귀 가능성을 판단합니다.
-
-수익기회보다 **상태를 정확히 아는 것**을 우선합니다.
-
-## 14. 배포 후 검증 체크리스트
-
-- [ ] 기대한 main SHA / package / config / strategy 일치
+- [ ] 기대한 `main` SHA / package / config / strategy 일치
 - [ ] service active
 - [ ] live commissioning 상태 보존
-- [ ] 운영자 `/halt` latch 보존
+- [ ] 운영자 `/halt` latch / BUY halt 보존
 - [ ] startup quarantine 의도대로 적용
 - [ ] DB quick check 정상
-- [ ] 미체결·UNKNOWN 확인
-- [ ] Toss read-only 조회 정상
-- [ ] 계좌·원장 대조 정상
+- [ ] 미체결·UNKNOWN 및 계좌·원장 대조 정상
+- [ ] Toss read-only runtime smoke 정상
 - [ ] Telegram 메뉴/smoke 정상
-- [ ] 외부 health/recent activity 확인
-- [ ] 최초 시작 미승인이면 현재 허용원금 0·신규 BUY 차단
-- [ ] 이미 시작된 계정이면 자동복귀 조건을 runtime이 독립 재검증
+- [ ] scheduler heartbeat 정상
+- [ ] 별도 외부 health PASS
+- [ ] 배포/health Issue 결과 정리
 
-## 15. 문서-only 변경
+사용자가 배포까지 승인한 runtime 변경은 이 체크리스트가 끝나기 전에는 완료로 간주하지 않습니다.
+
+## 14. 문서-only 변경
 
 Markdown 설명·링크·문서 구조만 바뀌고 코드·설정·runtime 동작이 바뀌지 않았다면:
 
