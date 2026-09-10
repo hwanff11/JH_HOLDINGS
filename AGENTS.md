@@ -73,7 +73,7 @@
 - CI가 끝나기 전에 PASS로 추정하지 않습니다.
 - merge와 deploy, deploy와 BUY 잠금해제는 각각 별개 사건입니다.
 
-## 7. 사용자 단축 명령
+## 7. 사용자 단축 명령과 완료 범위
 
 사용자가 `작업 시작`이라고 하면:
 
@@ -89,10 +89,23 @@
 2. 변경 유형에 맞는 pytest/Ruff/설정/백테스트/보안검증을 실행합니다.
 3. 실패 결과를 숨기지 않습니다.
 4. 변경을 branch에 commit/push하고 PR CI를 확인합니다.
-5. 필요한 문서와 `CURRENT_WORK.md`를 같은 PR에서 마감합니다.
+5. 필요한 문서와 `CURRENT_WORK.md`를 같은 작업에서 마감합니다.
 6. runtime 영향이 있고 배포가 승인된 경우 `docs/infra/DEPLOYMENT.md`의 표준 경로로 최신 검증 `main`만 배포합니다.
 7. 문서-only 변경은 merge로 완료하고 Oracle runtime은 재배포하지 않습니다.
 8. 최종 commit SHA, 테스트, 배포 여부, 남은 작업을 보고합니다.
+
+사용자가 **`배포해`, `배포까지`, `끝까지 마무리` 또는 같은 의미로 운영배포까지 명확히 승인**하면 다음 계약을 추가 적용합니다.
+
+1. PR CI가 실패하면 실패 원인을 수정하고 다시 CI를 돌립니다. 단순 실패 때문에 사용자에게 재승인을 요구하지 않습니다.
+2. 필수 CI가 모두 PASS하면 승인된 PR을 `main`에 병합합니다.
+3. JH LIVE runtime 변경은 owner-only `[deploy-oracle-live-armed]` Issue ChatOps를 사용해 PC/사용자 터미널 없이 배포합니다.
+4. 배포 workflow를 끝까지 추적하고 exact runtime SHA, service, DB, scheduler, reconciliation, Telegram/Toss read-only 검증을 확인합니다.
+5. 배포 또는 사후 검증에서 새 오류가 나오면 원인을 수정하고 **CI → merge → 재배포 → health**를 성공할 때까지 반복합니다.
+6. 별도 `[oracle-health-check]` Issue ChatOps로 외부 health까지 확인합니다.
+7. 성공 이슈를 정리하고 `CURRENT_WORK.md`를 실제 검증 결과로 갱신합니다.
+8. **runtime 변경의 완료는 merge가 아니라 production deploy + post-deploy health PASS입니다.**
+
+이 배포승인은 `/auto start`, `/resume`, 운영자 `/halt` 해제, 운용자금/비율 변경, 임의 BUY를 승인하는 뜻이 아닙니다. 해당 상태변경은 기존 JH AUTO 운영자 안전계약을 따릅니다.
 
 ## 8. 공개 Markdown 작성 원칙
 
