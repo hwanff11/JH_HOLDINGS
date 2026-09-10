@@ -90,10 +90,10 @@ class YFinanceDataSource:
                 time.sleep(YFINANCE_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
 
         if frame is None or frame.empty:
-            # yfinance exposes two independent high-level paths.  The bulk download
-            # endpoint can temporarily return an empty frame while Ticker.history is
-            # healthy, especially near the daily data refresh window.  Try that path
-            # once before falling back to a fully-covered local cache.
+            # Keep the fallback independent from yf.download's repair machinery.
+            # yfinance repair may require optional sklearn components; a provider
+            # response can therefore be usable even when the repaired bulk path is
+            # unavailable. Strategy inputs are still normalized and range-checked.
             try:
                 with self._lock:
                     alternate = yf.Ticker(symbol).history(
@@ -102,7 +102,7 @@ class YFinanceDataSource:
                         interval="1d",
                         auto_adjust=True,
                         actions=False,
-                        repair=True,
+                        repair=False,
                     )
                 if alternate is not None and not alternate.empty:
                     frame = alternate
