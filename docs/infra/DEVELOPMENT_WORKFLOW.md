@@ -1,6 +1,6 @@
 # JH_HOLDINGS 개발 협업 워크플로
 
-이 문서는 **사람·ChatGPT·Codex/IDE·GitHub Actions·Oracle이 어떤 역할로 변경을 이어가는지와 PR 완료기준**을 설명합니다.
+이 문서는 **사람·ChatGPT·Codex/IDE·GitHub Actions·Oracle이 어떤 역할로 변경을 이어가는지와 PR/배포 완료기준**을 설명합니다.
 
 에이전트가 반드시 지켜야 할 짧은 강제규칙은 [`../../AGENTS.md`](../../AGENTS.md), 현재 운영상태는 [`../../CURRENT_WORK.md`](../../CURRENT_WORK.md)가 소유합니다. 이 문서는 두 내용을 반복하지 않습니다.
 
@@ -17,10 +17,10 @@
 
 | 환경·주체 | 주 책임 | 할 수 있는 일 | 하지 않는 일 |
 |---|---|---|---|
-| 운영자 | 우선순위·전략 채택·배포·실거래 승인 | 요구사항 확정, 후보 채택, 배포 승인, Telegram 최초 시작·자금변경·매수재개 승인 | 배포승인을 최초 BUY 승인으로 자동 해석하지 않음 |
+| 운영자 | 우선순위·전략 채택·실거래 위험권한 | 요구사항 확정, 후보 채택, 배포 승인, Telegram 최초 시작·자금변경·매수재개 승인 | 배포승인을 최초 BUY 승인으로 자동 해석하지 않음 |
 | Codex·로컬 IDE | 구현·디버깅·로컬 검증 | 코드 수정, 테스트, 작업트리 관리, 재현 | 사용자 미커밋 변경 덮어쓰기, secret 추정 |
-| ChatGPT·GitHub 연결 | 원격 변경·PR·CI 추적·작업 종결 | 최신 원격 확인, branch/PR, Actions 확인, 문서/코드 변경, 승인된 배포 후 상태 확인 | secret 조회·복제, 로컬 파일을 보았다고 가정 |
-| GitHub Actions | 공통 CI·연구 artifact·승인된 배포 | Ruff, pytest, Security, Backtest, dry-run/live-safe deploy | 임의 branch·미검증 코드 운영배포 |
+| ChatGPT·GitHub 연결 | 원격 변경·PR·CI·배포 작업 종결 | 최신 원격 확인, branch/PR, Actions 확인, 문서/코드 변경, 승인된 ChatOps 배포와 사후 health 추적 | secret 조회·복제, 로컬 파일을 보았다고 가정 |
+| GitHub Actions | 공통 CI·연구 artifact·승인된 배포 | Ruff, pytest, Security, Backtest, dry-run/live-safe deploy, 외부 health | 임의 branch·미검증 코드 운영배포 |
 | Oracle | 검증된 runtime 운영 | Telegram, 일일분석, 주문·감시·계좌 대조 | 연구 후보탐색, source 직접편집 |
 
 ## 3. 가장 중요한 경계
@@ -109,7 +109,7 @@ production baseline 재현
 
 ### 문서 PR 핵심 원칙
 
-- 한 규칙의 소유 문서 하나
+- **한 규칙의 소유 문서 하나**
 - `CURRENT_WORK`에 완료 상세를 누적하지 않음
 - 현재 상태와 역사 분리
 - 운영자 가이드와 공식 사양의 책임 분리
@@ -138,6 +138,23 @@ runtime 영향이 있는 merge에만 승인된 배포경로를 사용합니다.
 - 배포 중 `/auto start`, `/resume`, 자금변경 금지
 - 배포 성공을 BUY 재개로 해석하지 않음
 
+### ChatGPT에서 PC 없이 끝내는 표준 경로
+
+운영자가 이 대화에서 배포까지 명확히 승인했다면 ChatGPT는 사용자의 PC/터미널 연결을 요구하지 않고 GitHub의 owner-only ChatOps를 사용합니다.
+
+```text
+PR 필수 CI PASS
+→ main merge
+→ [deploy-oracle-live-armed] Issue 생성
+→ Live-Armed deploy workflow 완료까지 추적
+→ exact runtime / live DB / reconciliation / Telegram/Toss read-only 검증
+→ [oracle-health-check] Issue 생성
+→ 외부 service/SQLite/scheduler/config health PASS 확인
+→ 성공 Issue 정리
+```
+
+배포 또는 health에서 새 문제가 나오면 같은 승인 범위에서 원인을 수정하고 **branch → CI → merge → 재배포 → health**를 성공할 때까지 반복합니다. 단순 CI/Actions/배포 wrapper 오류 때문에 이미 받은 운영배포 승인을 매 단계 다시 묻지 않습니다.
+
 ## 10. 장애 수정 흐름
 
 ```text
@@ -154,9 +171,11 @@ runtime 영향이 있는 merge에만 승인된 배포경로를 사용합니다.
 → 외부 health 재검증
 ```
 
-`service active`만 보고 장애가 해결됐다고 판단하지 않습니다.
+`service active`만 보고 장애가 해결됐다고 판단하지 않습니다. read-only provider 일시장애와 실제 broker/ledger 불일치는 구분하되, 자동으로 증명되지 않는 위험증가 상태는 fail-closed로 둡니다.
 
-## 11. PR Definition of Done
+## 11. 완료 기준
+
+### PR Definition of Done
 
 모든 PR:
 
@@ -195,3 +214,18 @@ runtime 영향이 있는 merge에만 승인된 배포경로를 사용합니다.
 - [ ] 상대링크 전수검사
 - [ ] SSOT 중복검사
 - [ ] 문서-only면 Oracle 재배포 생략
+
+### 운영배포 Definition of Done
+
+사용자가 runtime 변경을 **배포까지** 승인한 작업은 다음이 모두 참이어야 최종 완료입니다.
+
+- [ ] 필수 CI PASS
+- [ ] `main` merge 완료
+- [ ] 승인된 production ChatOps deploy PASS
+- [ ] 기대 SHA와 실제 runtime 일치
+- [ ] service/DB/reconciliation/Telegram 등 배포 smoke PASS
+- [ ] 별도 외부 health PASS
+- [ ] 새 문제와 실패 이슈가 정리됨
+- [ ] `CURRENT_WORK.md`가 실제 상태와 일치
+
+배포 자체는 `/auto start`, `/resume`, 운영자 `/halt` 해제 또는 자금설정 변경 권한이 아닙니다.
