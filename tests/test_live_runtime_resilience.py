@@ -7,11 +7,24 @@ import pandas as pd
 import pytest
 
 import jd_holdings.infrastructure.live_runtime_resilience as resilience_module
+from jd_holdings.application.broker import DryRunBroker
 from jd_holdings.application.database import SQLiteRepository
 from jd_holdings.core.indicators import MarketDataError
+from jd_holdings.infrastructure.live_reconciliation import (
+    ResilientLiveReconciliationService,
+)
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientLiveInitialOnboardingPortfolioService,
     ResilientReadTossClient,
+)
+from jd_holdings.infrastructure.provider_recovery import (
+    AUTO_TRANSIENT_CLEAN_STREAK_KEY,
+    AUTO_TRANSIENT_RECOVERY_PENDING_KEY,
+    DailyAnalysisRetryGate,
+    TRANSIENT_RECON_REASON_KEY,
+    TransientReconciliationError,
+    advance_transient_recovery,
+    arm_transient_recovery,
 )
 from jd_holdings.infrastructure.toss_client import TossApiError, TossClient
 
@@ -121,6 +134,91 @@ def test_nonretryable_read_error_fails_fast(monkeypatch):
 def test_order_writes_are_not_overridden_by_read_retry_layer():
     assert ResilientReadTossClient.place_order is TossClient.place_order
     assert ResilientReadTossClient.cancel_order is TossClient.cancel_order
+
+
+class _TransientHoldingsBroker(DryRunBroker):
+    def get_holdings(self, symbol=None):
+        del symbol
+        raise TossApiError("temporary holdings outage", status_code=503, retryable=True)
+
+
+def test_live_reconciliation_transient_holdings_outage_does_not_set_sticky_safe_mode(
+    tmp_path,
+    config,
+):
+    repository = SQLiteRepository(tmp_path / "transient-holdings.db", config)
+    broker = _TransientHoldingsBroker(
+        {"QQQ": Decimal("500"), "TQQQ": Decimal("100"), "SOXL": Decimal("50")}
+    )
+
+    with pytest.raises(TransientReconciliationError, match="임시 차단"):
+        ResilientLiveReconciliationService(config, repository, broker).run()
+
+    assert repository.get_system_value("v322_portfolio_safe_mode") != "1"
+    assert repository.get_system_value(TRANSIENT_RECON_REASON_KEY) == (
+        "BROKER_HOLDINGS_LOOKUP_FAILED"
+    )
+
+
+class _TransientOpenOrdersBroker(DryRunBroker):
+    def list_orders(self, *, status, symbol=None, limit=100):
+        del limit
+        if status == "OPEN" and symbol == "QQQ":
+            raise TossApiError("temporary order read outage", status_code=503, retryable=True)
+        return []
+
+
+def test_live_reconciliation_transient_open_order_read_does_not_set_sticky_safe_mode(
+    tmp_path,
+    config,
+):
+    repository = SQLiteRepository(tmp_path / "transient-orders.db", config)
+    broker = _TransientOpenOrdersBroker(
+        {"QQQ": Decimal("500"), "TQQQ": Decimal("100"), "SOXL": Decimal("50")}
+    )
+
+    with pytest.raises(TransientReconciliationError, match="임시 차단"):
+        ResilientLiveReconciliationService(config, repository, broker).run()
+
+    assert repository.get_system_value("v322_portfolio_safe_mode") != "1"
+    assert repository.get_system_value(TRANSIENT_RECON_REASON_KEY) == (
+        "BROKER_OPEN_ORDER_LOOKUP_FAILED:QQQ"
+    )
+
+
+def test_transient_recovery_requires_two_independent_clean_cycles(tmp_path, config):
+    repository = SQLiteRepository(tmp_path / "transient-streak.db", config)
+    arm_transient_recovery(repository)
+
+    ready, streak = advance_transient_recovery(repository)
+    assert not ready
+    assert streak == 1
+    assert repository.get_system_value(AUTO_TRANSIENT_RECOVERY_PENDING_KEY) == "1"
+    assert repository.get_system_value(AUTO_TRANSIENT_CLEAN_STREAK_KEY) == "1"
+
+    ready, streak = advance_transient_recovery(repository)
+    assert ready
+    assert streak == 2
+    assert repository.get_system_value(AUTO_TRANSIENT_RECOVERY_PENDING_KEY) == "0"
+    assert repository.get_system_value(AUTO_TRANSIENT_CLEAN_STREAK_KEY) == "0"
+
+
+def test_daily_analysis_retry_gate_uses_5_10_15_30_60_minute_backoff():
+    gate = DailyAnalysisRetryGate()
+    trade_date = date(2026, 9, 9)
+    now = 1000.0
+    expected = (300, 600, 900, 1800, 3600, 3600)
+
+    for index, delay in enumerate(expected, start=1):
+        assert gate.should_attempt(trade_date, now)
+        failures, actual = gate.record_failure(trade_date, now)
+        assert failures == index
+        assert actual == delay
+        assert not gate.should_attempt(trade_date, now + delay - 0.1)
+        now += delay
+
+    assert gate.record_success(trade_date) == len(expected)
+    assert gate.should_attempt(trade_date, now)
 
 
 class _StaleExecutionQuoteBroker:
