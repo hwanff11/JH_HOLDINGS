@@ -14,6 +14,7 @@ from jd_holdings.infrastructure.live_runtime_hardening import (
     HardenedOperationalSafetyTelegramBotApp,
     _live_order_monitor_interval,
 )
+from jd_holdings.infrastructure.provider_recovery import DailyAnalysisRetryGate
 from jd_holdings.settings import RuntimeSettings
 
 
@@ -240,6 +241,7 @@ def _scheduler_app(tmp_path, config, calls):
     app._last_monitor = -1_000_000_000.0
     app._last_idle_cash_sweep = -1_000_000_000.0
     app._reconciliation_notice_at = {}
+    app._daily_analysis_retry = DailyAnalysisRetryGate()
     app._send = lambda *args, **kwargs: None
     app._send_reconciliation_alert = lambda *args, **kwargs: None
     app._notify_runtime_error = lambda event_type, title, exc: (_ for _ in ()).throw(exc)
@@ -249,6 +251,27 @@ def _scheduler_app(tmp_path, config, calls):
 
 
 def test_live_scheduler_settles_and_reconciles_before_portfolio(
+    tmp_path, config, monkeypatch
+):
+    calls = []
+    app = _scheduler_app(tmp_path, config, calls)
+    app.repository.set_system_value("last_analysis_trade_date", "2026-08-27")
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.live_runtime_hardening.is_toss_order_maintenance_window",
+        lambda _now: False,
+    )
+    monkeypatch.setattr(
+        "jd_holdings.infrastructure.live_runtime_hardening._daily_analysis_is_due",
+        lambda *_args: True,
+    )
+
+    app._scheduler_loop()
+
+    assert calls[:3] == ["monitor", "reconcile", "portfolio"]
+    assert "analysis" not in calls
+
+
+def test_live_scheduler_runs_daily_analysis_before_portfolio_when_analysis_is_stale(
     tmp_path, config, monkeypatch
 ):
     calls = []
@@ -264,8 +287,8 @@ def test_live_scheduler_settles_and_reconciles_before_portfolio(
 
     app._scheduler_loop()
 
-    assert calls[:3] == ["monitor", "reconcile", "portfolio"]
-    assert "analysis" in calls
+    assert calls[:3] == ["monitor", "reconcile", "analysis"]
+    assert "portfolio" not in calls
 
 
 def test_live_scheduler_skips_broker_jobs_during_toss_maintenance(

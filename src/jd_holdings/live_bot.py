@@ -11,7 +11,6 @@ from jd_holdings.application.jh_auto_runtime_services import (
 from jd_holdings.application.live_commissioning import arm_live_startup_buy_halt
 from jd_holdings.application.order_manager import OrderManager
 from jd_holdings.application.position_manager import PositionManager
-from jd_holdings.application.reconciliation import ReconciliationService
 from jd_holdings.application.tp_manager import TakeProfitManager
 from jd_holdings.automation.final_ops_hardening import (
     FinalOpsProductionJHAutoService as ProductionJHAutoService,
@@ -26,6 +25,9 @@ from jd_holdings.infrastructure.final_ops_runtime import (
 )
 from jd_holdings.infrastructure.final_ops_runtime import LiveRuntimeLock
 from jd_holdings.infrastructure.jh_auto_live_display import LiveJHAutoTelegramBotApp
+from jd_holdings.infrastructure.live_reconciliation import (
+    ResilientLiveReconciliationService as ReconciliationService,
+)
 from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
 )

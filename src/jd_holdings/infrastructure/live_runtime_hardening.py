@@ -7,9 +7,17 @@ from datetime import UTC, datetime
 from jd_holdings.application.live_runtime_services import (
     LiveInitialOnboardingPortfolioService,
 )
+from jd_holdings.core.indicators import MarketDataError
 
 from .market_clock import is_toss_order_maintenance_window
 from .operational_safety_telegram import OperationalSafetyTelegramBotApp
+from .provider_recovery import (
+    DAILY_PROVIDER_RECOVERY_PENDING_KEY,
+    DailyAnalysisRetryGate,
+    TransientReconciliationError,
+    advance_transient_recovery,
+    arm_transient_recovery,
+)
 from .safe_mode_diagnostics import broker_diagnostic, operator_action
 from .telegram_bot import SEOUL_TZ, _daily_analysis_is_due, _format_idle_cash_event
 from .telegram_bot_runtime import _format_daily_portfolio_brief
@@ -38,10 +46,12 @@ class HardenedLiveInitialOnboardingPortfolioService(
 
 
 class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
-    """Run order settlement before reconciliation and portfolio decisions in live mode."""
+    """Run settlement/reconciliation first and self-heal read-only provider outages."""
 
     def __init__(self, *args, **kwargs) -> None:
         self._toss_diagnostic_notice_at: dict[str, float] = {}
+        self._transient_reconciliation_notice_at: dict[str, float] = {}
+        self._daily_analysis_retry = DailyAnalysisRetryGate()
         super().__init__(*args, **kwargs)
 
     def _notify_runtime_error(
@@ -107,11 +117,9 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
     def _probe_open_order_lookup_failure(self, symbol: str) -> None:
         """Re-run only a failed OPEN-order read so Toss metadata reaches Telegram.
 
-        Reconciliation intentionally returns safe issue codes instead of raising for a
-        per-symbol OPEN-order lookup failure. That fail-closed contract must stay as-is,
-        but it used to discard the TossApiError cause before the Telegram diagnostic
-        layer could inspect HTTP/code/request-id metadata. Probe once per alert window;
-        never place/cancel an order and never auto-resume SAFE_MODE.
+        Structural reconciliation failures stay sticky SAFE_MODE. Transient Toss read
+        failures are intercepted by the live reconciliation boundary before reaching
+        this path, so a successful probe here never auto-resumes SAFE_MODE.
         """
         try:
             self.trading_service.broker.list_orders(
@@ -129,7 +137,7 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
             self._send(
                 f"ℹ️ <b>[{html.escape(symbol)} 토스 API 재확인 성공]</b>\n\n"
                 "직전 미체결 주문 조회는 실패했지만 즉시 재확인에서는 정상 응답했습니다.\n"
-                "일시적 API 오류일 수 있으나 SAFE_MODE는 자동 해제하지 않습니다.\n"
+                "구조적 SAFE_MODE는 자동 해제하지 않습니다.\n"
                 "<code>/errors</code>·<code>/order</code>·<code>/account</code> 확인 후 "
                 "정합성이 맞을 때만 <code>/resume</code> 하세요."
             )
@@ -180,6 +188,128 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
         if any(issue.startswith("BROKER_OPEN_ORDER_LOOKUP_FAILED:") for issue in issues):
             self._probe_open_order_lookup_failure(symbol)
 
+    def _quarantine_transient_reconciliation(
+        self,
+        exc: TransientReconciliationError,
+    ) -> None:
+        arm_transient_recovery(self.repository)
+        auto_service = getattr(self, "auto_service", None)
+        if auto_service is None:
+            return
+        settings = auto_service.settings()
+        if (
+            settings.launch_authorized
+            and not settings.operator_halt_latched
+            and not settings.quarantine
+        ):
+            auto_service.quarantine(f"TRANSIENT_PROVIDER:{exc.reason}")
+
+    def _notify_transient_reconciliation(
+        self,
+        exc: TransientReconciliationError,
+        *,
+        cooldown_seconds: int = 1800,
+    ) -> None:
+        fingerprint = exc.reason
+        now = time.monotonic()
+        last = self._transient_reconciliation_notice_at.get(fingerprint)
+        if last is not None and now - last < cooldown_seconds:
+            return
+        self._transient_reconciliation_notice_at[fingerprint] = now
+        self._send(
+            "🟡 <b>[토스 읽기 일시 장애 · 자동복구 중]</b>\n\n"
+            f"• 원인 : <code>{html.escape(exc.reason)}</code>\n"
+            "• 신규 BUY : <b>임시 차단</b>\n"
+            "• 주문감시·위험축소 : 가능한 범위에서 계속\n"
+            "• 자동조치 : 토스 읽기를 계속 재확인하고, 정상화 후 계좌·원장 "
+            "정합성을 2회 연속 확인합니다.\n\n"
+            "실제 수량/주문 불일치가 발견되지 않는 한 <code>/resume</code>을 "
+            "직접 누를 필요가 없습니다."
+        )
+
+    def _daily_analysis_blocks_auto(self) -> bool:
+        """Never execute yesterday's pending BUY before today's due analysis succeeds."""
+        now_kst = datetime.now(UTC).astimezone(SEOUL_TZ)
+        if not _daily_analysis_is_due(
+            now_kst,
+            self.config.scheduler.daily_analysis_time_kst,
+        ):
+            return False
+        try:
+            completed = self.market_clock.latest_completed_session(
+                delay_minutes=self.config.scheduler.signal_delay_minutes
+            )
+        except Exception:
+            return True
+        return self.repository.get_system_value("last_analysis_trade_date") != (
+            completed.isoformat()
+        )
+
+    def _record_daily_job_failure(
+        self,
+        completed,
+        title: str,
+        exc: Exception,
+        *,
+        provider_failure: bool,
+    ) -> None:
+        failures, delay = self._daily_analysis_retry.record_failure(
+            completed,
+            time.monotonic(),
+        )
+        self.repository.set_system_value(DAILY_PROVIDER_RECOVERY_PENDING_KEY, "1")
+        auto_service = getattr(self, "auto_service", None)
+        if auto_service is not None:
+            settings = auto_service.settings()
+            if (
+                settings.launch_authorized
+                and not settings.operator_halt_latched
+                and not settings.quarantine
+            ):
+                auto_service.quarantine(
+                    f"DAILY_PROVIDER_RECOVERY:{type(exc).__name__}"
+                )
+        self.logger.warning(
+            "%s 실패; %d초 후 자동 재시도합니다 (%d회 실패): %s",
+            title,
+            delay,
+            failures,
+            exc,
+        )
+        if provider_failure and failures == 1:
+            self._send(
+                "🟡 <b>[일일 시세 조회 지연 · 자동재시도]</b>\n\n"
+                f"• 작업 : <b>{html.escape(title)}</b>\n"
+                f"• 거래일 : <code>{completed.isoformat()}</code>\n"
+                f"• 다음 재시도 : <b>{delay // 60}분 후</b>\n"
+                "• 신규 BUY : <b>시세 정상화까지 임시 차단</b>\n\n"
+                "5→10→15→30→60분 간격으로 자동 재시도하며 같은 장애를 "
+                "반복 알림하지 않습니다. 정상화되면 복구 완료를 한 번 알려드립니다."
+            )
+        elif not provider_failure:
+            self._notify_runtime_error(
+                "DAILY_JOB_ERROR",
+                title,
+                exc,
+                cooldown_seconds=max(600, delay),
+            )
+
+    def _record_daily_job_success(self, completed) -> None:
+        was_pending = (
+            self.repository.get_system_value(DAILY_PROVIDER_RECOVERY_PENDING_KEY) == "1"
+        )
+        recovered_failures = self._daily_analysis_retry.record_success(completed)
+        if not was_pending and recovered_failures == 0:
+            return
+        self.repository.set_system_value(DAILY_PROVIDER_RECOVERY_PENDING_KEY, "0")
+        self._send(
+            "✅ <b>[일일 시세 자동복구 완료]</b>\n\n"
+            f"• 거래일 : <code>{completed.isoformat()}</code>\n"
+            "• 최신 일봉 조회와 일일 분석을 정상 완료했습니다.\n"
+            "• 다음 신규 BUY는 다음 독립 안전주기에서 계좌·원장·주문 상태를 "
+            "다시 확인한 뒤에만 재개됩니다."
+        )
+
     def _run_order_safety_cycle(self) -> bool:
         monitor_clean = True
         try:
@@ -219,17 +349,48 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
         reconciliation_clean = False
         try:
             mismatches = self.reconciliation_service.run()
-            reconciliation_clean = not mismatches
-            if not mismatches:
-                self._reconciliation_notice_at.clear()
-            for symbol, issues in mismatches.items():
-                self._send_reconciliation_alert(symbol, issues)
+        except TransientReconciliationError as exc:
+            self._quarantine_transient_reconciliation(exc)
+            self._notify_transient_reconciliation(exc)
         except Exception as exc:
             self._notify_runtime_error(
                 "RECONCILIATION_ERROR",
                 "계좌 정합성 점검 오류",
                 exc,
             )
+        else:
+            if not mismatches:
+                self._reconciliation_notice_at.clear()
+                recovery_ready, clean_streak = advance_transient_recovery(
+                    self.repository
+                )
+                if recovery_ready:
+                    reconciliation_clean = True
+                    if clean_streak:
+                        self._transient_reconciliation_notice_at.clear()
+                        self._send(
+                            "✅ <b>[토스 읽기 자동복구 검증 완료]</b>\n\n"
+                            "계좌·원장·미체결 주문을 독립 안전주기에서 2회 연속 "
+                            "정상 확인했습니다. 다른 안전조건이 정상이라면 임시격리를 "
+                            "자동 해제할 수 있습니다."
+                        )
+                else:
+                    self.logger.info(
+                        "토스 읽기 복구 후 정합성 연속 검증 %d/2 완료",
+                        clean_streak,
+                    )
+            for symbol, issues in mismatches.items():
+                self._send_reconciliation_alert(symbol, issues)
+
+        if (
+            reconciliation_clean
+            and self.repository.get_system_value(DAILY_PROVIDER_RECOVERY_PENDING_KEY)
+            == "1"
+        ):
+            reconciliation_clean = False
+        if reconciliation_clean and self._daily_analysis_blocks_auto():
+            reconciliation_clean = False
+
         self._last_monitor = time.monotonic()
         return monitor_clean and reconciliation_clean
 
@@ -268,12 +429,24 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
                         exc,
                     )
 
+            provider_attempted = False
+            provider_failed = False
+            provider_retry_due = bool(
+                completed is not None
+                and self._daily_analysis_retry.should_attempt(
+                    completed,
+                    time.monotonic(),
+                )
+            )
+
             if (
                 self.portfolio_service is not None
                 and completed is not None
                 and not maintenance
                 and safety_ready
+                and provider_retry_due
             ):
+                provider_attempted = True
                 try:
                     portfolio_run = self.portfolio_service.run_month_end()
                     if portfolio_run is not None:
@@ -289,27 +462,56 @@ class HardenedOperationalSafetyTelegramBotApp(OperationalSafetyTelegramBotApp):
                                 continue
                             self._send(f"📊 {html.escape(event)}")
                         self.notify_portfolio_buy_batch_ready(portfolio_run.signals)
+                except MarketDataError as exc:
+                    provider_failed = True
+                    self._record_daily_job_failure(
+                        completed,
+                        "V3.2.2 배분 점검",
+                        exc,
+                        provider_failure=True,
+                    )
                 except Exception as exc:
-                    self._notify_runtime_error(
-                        "PORTFOLIO_SCHEDULER_ERROR",
+                    provider_failed = True
+                    self._record_daily_job_failure(
+                        completed,
                         "V3.2.2 배분 점검 오류",
                         exc,
+                        provider_failure=False,
                     )
 
-            if completed is not None:
+            if completed is not None and provider_retry_due and not provider_failed:
                 try:
                     last_analysis = self.repository.get_system_value(
                         "last_analysis_trade_date"
                     )
                     if last_analysis != completed.isoformat():
+                        provider_attempted = True
                         results = self.analysis_service.analyze_all()
                         self.notify_new_signals(results)
+                except MarketDataError as exc:
+                    provider_failed = True
+                    self._record_daily_job_failure(
+                        completed,
+                        "일일 전략 분석",
+                        exc,
+                        provider_failure=True,
+                    )
                 except Exception as exc:
-                    self._notify_runtime_error(
-                        "ANALYSIS_SCHEDULER_ERROR",
+                    provider_failed = True
+                    self._record_daily_job_failure(
+                        completed,
                         "일일 전략 분석 오류",
                         exc,
+                        provider_failure=False,
                     )
+
+            if (
+                completed is not None
+                and provider_attempted
+                and not provider_failed
+                and provider_retry_due
+            ):
+                self._record_daily_job_success(completed)
 
             cash_due = (
                 not maintenance
