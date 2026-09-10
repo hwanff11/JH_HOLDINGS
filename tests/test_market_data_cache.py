@@ -7,6 +7,14 @@ from jd_holdings.core.indicators import MarketDataError
 from jd_holdings.infrastructure import market_data
 
 
+class _EmptyTicker:
+    def __init__(self, _symbol: str) -> None:
+        pass
+
+    def history(self, **_kwargs):
+        return pd.DataFrame()
+
+
 def test_yfinance_internal_cache_uses_jdss_cache_dir(tmp_path, monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(
@@ -78,6 +86,7 @@ def test_daily_falls_back_to_explicitly_stale_cache_only_without_refresh(
     cache.mkdir()
     _cached_prices(cache / "QQQ_2026-08-01_2026-08-05_adjusted.csv")
     monkeypatch.setattr(market_data.yf, "download", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(market_data.yf, "Ticker", _EmptyTicker)
     source = market_data.YFinanceDataSource(cache)
 
     stale = source.daily("QQQ", "2026-08-03", "2026-08-10")

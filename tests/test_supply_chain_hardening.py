@@ -11,12 +11,15 @@ def _normalize_pin(value: str) -> str:
     return f"{re.sub(r'[-_.]+', '-', name)}=={version}"
 
 
-def test_runtime_dependencies_keep_yfinance_requirement_only():
+def test_runtime_dependencies_pin_yfinance_repair_requirements():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     dependencies = tuple(str(value).lower() for value in project["dependencies"])
 
     assert "scipy==1.18.0" in dependencies
-    assert not any(value.startswith("scikit-learn") for value in dependencies)
+    # yfinance 1.6.0 imports sklearn dynamically when repair=True encounters
+    # reconstructable price anomalies. Production uses repair=True for canonical
+    # daily data, so keep that runtime dependency explicit and exactly pinned.
+    assert "scikit-learn==1.9.0" in dependencies
 
 
 def test_requirements_runtime_pins_match_pyproject():

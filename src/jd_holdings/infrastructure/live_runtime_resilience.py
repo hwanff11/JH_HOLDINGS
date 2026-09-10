@@ -21,11 +21,13 @@ from jd_holdings.core.v322_allocation import (
 )
 
 from .live_runtime_hardening import HardenedLiveInitialOnboardingPortfolioService
+from .shared_toss_token import SharedTossTokenCache
 from .toss_client import TossApiError, TossClient
 
 LOGGER = logging.getLogger(__name__)
 READ_MAX_ATTEMPTS = 3
 READ_RETRY_BASE_SECONDS = 0.5
+RECOVERABLE_AUTH_CODES = {"invalid-token", "expired-token", "token-revoked"}
 T = TypeVar("T")
 
 
@@ -35,25 +37,52 @@ def _retryable_read_error(exc: TossApiError) -> bool:
     Network/timeout/429/5xx failures are explicitly marked retryable by TossClient.
     A malformed successful 2xx read response is also safe to retry because the
     operation has no side effect. TossClient already performs one bounded token
-    refresh + replay for GET requests; a final invalid/expired token can still occur
-    when concurrent readers observed the same rejected token and refreshed in close
-    succession. Retrying the read lets those callers converge on the newest cached
-    token without ever replaying a write request.
+    refresh + replay for GET requests; a final invalid/expired/revoked token can still
+    occur when concurrent readers observed the same rejected token. Retrying the read
+    lets those callers converge on the newest shared token without ever replaying a
+    write request.
     """
     if exc.retryable:
         return True
-    if exc.status_code == 401 and exc.code in {"invalid-token", "expired-token"}:
+    if exc.status_code == 401 and exc.code in RECOVERABLE_AUTH_CODES:
         return True
     status = exc.status_code
     return bool(status is not None and 200 <= status < 300 and "응답" in str(exc))
 
 
 class ResilientReadTossClient(TossClient):
-    """Retry only read-only Toss calls so brief API noise does not become SAFE_MODE.
+    """Retry safe reads and coordinate OAuth tokens across local trading services.
 
     Order placement and cancellation are intentionally inherited unchanged. They are
     never automatically replayed because an ambiguous write result is trading risk.
+    When ``TOSS_SHARED_TOKEN_CACHE`` is configured, token issuance is serialized by a
+    cross-process file lock. This prevents JH_HOLDINGS and the independent CCI service
+    from repeatedly revoking one another when they use the same Toss app credentials.
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._shared_token_cache = SharedTossTokenCache.from_env(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+        )
+
+    def authenticate(self, *, force: bool = False) -> str:
+        cache = self._shared_token_cache
+        if not cache.enabled:
+            return super().authenticate(force=force)
+
+        rejected = self._access_token if force else None
+        with cache.locked():
+            cached = cache.load_locked(exclude_token=rejected if force else None)
+            if cached:
+                self._access_token = cached
+                return cached
+            if force and rejected:
+                cache.discard_locked(rejected)
+            token = super().authenticate(force=force)
+            cache.store_locked(token)
+            return token
 
     def _retry_read(self, label: str, operation: Callable[[], T]) -> T:
         last_error: TossApiError | None = None

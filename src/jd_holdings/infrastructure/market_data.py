@@ -89,6 +89,33 @@ class YFinanceDataSource:
                 )
                 time.sleep(YFINANCE_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
 
+        if refresh and (frame is None or frame.empty):
+            # LIVE/refresh callers get one independent Yahoo path after bounded
+            # bulk-download failures. The fallback deliberately avoids repair so a
+            # repair-specific provider failure cannot take out both retrieval paths.
+            try:
+                with self._lock:
+                    alternate = yf.Ticker(symbol).history(
+                        start=str(start),
+                        end=end_exclusive,
+                        interval="1d",
+                        auto_adjust=True,
+                        actions=False,
+                        repair=False,
+                    )
+                if alternate is not None and not alternate.empty:
+                    frame = alternate
+                    LOGGER.warning(
+                        "%s 일봉은 yf.download 실패 후 Ticker.history 대체 경로로 복구했습니다",
+                        symbol,
+                    )
+                else:
+                    last_error = MarketDataError(
+                        f"yfinance Ticker.history 빈 일봉 응답: {symbol}"
+                    )
+            except Exception as exc:  # pragma: no cover - provider/network failure
+                last_error = exc
+
         if frame is None or frame.empty:
             # Trading refresh must never fall back to stale data. Non-refresh
             # callers preserve the historical cache behavior used by research.
@@ -101,17 +128,15 @@ class YFinanceDataSource:
             if fallback is not None:
                 if refresh:
                     LOGGER.warning(
-                        "%s yfinance 조회가 %d회 실패하여 검증된 캐시(최신일 %s)를 사용합니다: %s",
+                        "%s yfinance 조회가 실패하여 검증된 캐시(최신일 %s)를 사용합니다: %s",
                         symbol,
-                        YFINANCE_DOWNLOAD_ATTEMPTS,
                         fallback.index[-1].date(),
                         last_error,
                     )
                 else:
                     LOGGER.warning(
-                        "%s yfinance 조회가 %d회 실패하여 기존 캐시(최신일 %s)를 사용합니다: %s",
+                        "%s yfinance 조회가 실패하여 기존 캐시(최신일 %s)를 사용합니다: %s",
                         symbol,
-                        YFINANCE_DOWNLOAD_ATTEMPTS,
                         fallback.index[-1].date(),
                         last_error,
                     )
@@ -119,6 +144,8 @@ class YFinanceDataSource:
             raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}") from last_error
 
         normalized = normalize_ohlcv(frame)
+        if isinstance(normalized.index, pd.DatetimeIndex) and normalized.index.tz is not None:
+            normalized.index = normalized.index.tz_localize(None)
         if cache_path:
             normalized.to_csv(cache_path)
         return normalized
@@ -232,7 +259,10 @@ class YFinanceDataSource:
     @staticmethod
     def _read_cache_full(path: Path) -> pd.DataFrame:
         cached = pd.read_csv(path, index_col=0, parse_dates=True)
-        return normalize_ohlcv(cached)
+        normalized = normalize_ohlcv(cached)
+        if isinstance(normalized.index, pd.DatetimeIndex) and normalized.index.tz is not None:
+            normalized.index = normalized.index.tz_localize(None)
+        return normalized
 
     def _best_cache(
         self,
