@@ -146,29 +146,44 @@ BUY가 허용 대기시간을 넘으면 취소를 요청하고 원주문 상태�
 
 취소 API의 성공응답만으로 실제 주문이 취소됐다고 확정하지 않습니다.
 
-## 12. 계좌·원장 대조
+## 12. 계좌·원장 대조와 provider 장애
 
 Toss 실제 보유·미체결이 최종 외부 사실입니다. 내부 원장과 다르면 어느 한쪽을 임의 정답으로 덮어쓰지 않습니다.
 
-대조 실패 시:
+**브로커 조회 실패와 브로커가 실제 불일치를 반환한 상태를 구분합니다.**
+
+### 명확한 read-only 일시장애
+
+보유수량, OPEN 주문, 이미 식별된 주문상태 같은 GET이 `token-revoked`, expired/invalid token, retryable 429/timeout/5xx 등으로 실패했지만 모순되는 broker 상태를 아직 관찰하지 못했다면:
+
+1. bounded GET retry
+2. 계속 실패하면 신규 BUY를 시스템 임시격리로 차단
+3. 조회 정상화 후 holdings·OPEN orders·known order status를 다시 읽음
+4. canonical 계좌·원장 대조를 독립 안전주기에서 2회 연속 통과
+5. 다른 안전조건도 정상일 때만 시스템 임시격리 자동복귀 가능
+6. 복귀가 증명된 같은 호출에서 바로 위험증가 주문을 이어 보내지 않고 다음 독립 안전주기에서 다시 검증
+
+단순 GET 실패만으로 `0주`, `미체결 없음`, `정상`으로 해석하지 않으며, 반대로 **상반된 상태가 관찰되지 않은 provider 장애만으로 원장 손상형 sticky SAFE_MODE를 만들지도 않습니다.**
+
+### 구조적 불일치
+
+조회가 정상 응답한 뒤 실제로 다음이 확인되면 기존 강한 안전정지를 유지합니다.
 
 1. 신규 BUY 차단
 2. 활성 주문 상태 확인
 3. 누락 체결 복구 가능성 확인
 4. 보유·미체결·원장 재대조
-5. 자동으로 정상증명 불가하면 SAFE_MODE 유지
-
-계좌조회 실패를 `0주`, `미체결 없음`, `정상`으로 해석하지 않습니다.
+5. 실제 수량불일치, `UNKNOWN`, 주문 identity/상태 불일치 등 자동으로 정상증명 불가하면 sticky SAFE_MODE 유지
 
 ## 13. 운영자 `/halt`, 시스템 임시격리, SAFE_MODE
 
 세 상태의 의미를 섞지 않습니다.
 
 - **운영자 `/halt`**: durable latch, 시스템 자동해제 금지
-- **시스템 임시격리**: 재시작·설정변경·복구점검 중 신규 BUY 차단. 조건 충족 시 시스템 복귀 가능
-- **SAFE_MODE**: 주문·원장·전략상태가 불확실해 정상증명이 필요한 강한 안전정지
+- **시스템 임시격리**: 재시작·설정변경·provider 복구점검 중 신규 BUY 차단. 조건 충족 시 시스템 복귀 가능
+- **SAFE_MODE**: 실제 주문·원장·전략상태가 불일치하거나 execution state가 불확실해 정상증명이 필요한 강한 안전정지
 
-`/resume`은 운영자 확인이 필요한 복구행위이며 주문 제출 버튼이 아닙니다.
+provider 일시장애에서 시작된 시스템 임시격리의 자동복구가 운영자 `/halt`를 해제해서는 안 됩니다. `/resume`은 운영자 확인이 필요한 구조적 복구행위이며 주문 제출 버튼이 아닙니다.
 
 ## 14. 프로세스·재시작 안전
 
@@ -187,7 +202,7 @@ Toss 실제 보유·미체결이 최종 외부 사실입니다. 내부 원장과
 - DB quick check 실패를 무시하고 서비스만 active로 만들지 않음
 - snapshot 복구는 실제 주문상태와 충돌할 수 있으므로 서비스 시작 후 상태변경이 발생한 DB를 무조건 과거로 되감지 않음
 
-## 16. Toss API 경계
+## 16. Toss API·shared token 경계
 
 - 공식 HTTPS endpoint만 사용
 - 인증·HTTP status·JSON schema·숫자범위 검증
@@ -196,6 +211,13 @@ Toss 실제 보유·미체결이 최종 외부 사실입니다. 내부 원장과
 - broker time/market session과 실제 제출시각 검증
 - 최신 가격 freshness를 사용자 표시 편의 때문에 완화하지 않음
 
+동일 호스트에서 복수 runtime이 같은 Toss client credential을 사용할 수 있는 경우 token refresh를 각 process가 독립 발급하지 않습니다. file-lock 기반 shared token cache로 refresh를 직렬화하고, 다른 process가 이미 갱신한 최신 token이 있으면 이를 재사용합니다.
+
+- token/cache/credential 실제 값은 로그·Markdown·Issue에 기록하지 않음
+- `token-revoked` 등 명확한 인증 갱신은 read-only GET에서만 bounded replay 가능
+- 주문/취소 write는 인증 갱신 뒤에도 blind replay 금지
+- 외부 LIVE health checker는 실행 중 runtime token 보호를 위해 독립 token issuer가 되지 않음
+
 ## 17. GitHub Actions와 SSH
 
 - 최소권한 token
@@ -203,8 +225,7 @@ Toss 실제 보유·미체결이 최종 외부 사실입니다. 내부 원장과
 - 승인된 owner 경로만 실거래 배포
 - `StrictHostKeyChecking=yes`
 - 사전에 검증된 host public key 고정
-- Actions 실행 중 `ssh-keyscan` 결과를 즉석 신뢰하지 않음
-- `accept-new` 금지
+- Actions 실행 중 새 host key를 즉석 신뢰하지 않음
 - host key가 바뀌면 원인 확인 전 배포 중단
 
 ## 18. 알림 실패
@@ -225,6 +246,8 @@ Telegram 알림 실패를 주문 실패로 해석하지 않습니다.
 - 중복주문·멱등성
 - 부분체결·UNKNOWN
 - write blind retry 금지
+- read-only provider 일시장애와 구조적 SAFE_MODE 구분
+- shared token refresh 단일화
 - SELL-first
 - restart/reconciliation
 - 운영자 halt 보존
