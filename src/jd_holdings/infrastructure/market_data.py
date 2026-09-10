@@ -70,7 +70,7 @@ class YFinanceDataSource:
                         actions=False,
                         progress=False,
                         threads=False,
-                        repair=False,
+                        repair=True,
                         multi_level_index=False,
                     )
                 if frame is not None and not frame.empty:
@@ -91,8 +91,8 @@ class YFinanceDataSource:
 
         if refresh and (frame is None or frame.empty):
             # LIVE/refresh callers get one independent Yahoo path after bounded
-            # bulk-download failures. Historical/non-refresh callers intentionally
-            # preserve the existing cache contract instead of silently changing data.
+            # bulk-download failures. The fallback deliberately avoids repair so a
+            # repair-specific provider failure cannot take out both retrieval paths.
             try:
                 with self._lock:
                     alternate = yf.Ticker(symbol).history(
