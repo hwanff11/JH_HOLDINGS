@@ -168,7 +168,7 @@ class _TransientOpenOrdersBroker(DryRunBroker):
         return []
 
 
-def test_live_reconciliation_transient_open_order_read_does_not_set_sticky_safe_mode(
+def test_live_reconciliation_open_order_read_failure_remains_sticky_safe_mode(
     tmp_path,
     config,
 ):
@@ -177,13 +177,13 @@ def test_live_reconciliation_transient_open_order_read_does_not_set_sticky_safe_
         {"QQQ": Decimal("500"), "TQQQ": Decimal("100"), "SOXL": Decimal("50")}
     )
 
-    with pytest.raises(TransientReconciliationError, match="임시 차단"):
-        ResilientLiveReconciliationService(config, repository, broker).run()
+    issues = ResilientLiveReconciliationService(config, repository, broker).run()
 
-    assert repository.get_system_value("v322_portfolio_safe_mode") != "1"
-    assert repository.get_system_value(TRANSIENT_RECON_REASON_KEY) == (
-        "BROKER_OPEN_ORDER_LOOKUP_FAILED:QQQ"
+    assert any(
+        issue.startswith("BROKER_OPEN_ORDER_LOOKUP_FAILED:")
+        for issue in issues["QQQ"]
     )
+    assert repository.get_system_value("v322_portfolio_safe_mode") == "1"
 
 
 def test_transient_recovery_requires_two_independent_clean_cycles(tmp_path, config):
