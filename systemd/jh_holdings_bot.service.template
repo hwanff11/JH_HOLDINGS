@@ -14,6 +14,7 @@ Environment=JDSS_DB_PATH=__TARGET_DIR__/shared/data/jdss.db
 Environment=JDSS_LOG_PATH=__TARGET_DIR__/shared/logs/jdss.log
 Environment=JDSS_CACHE_PATH=__TARGET_DIR__/shared/data/cache
 Environment=JDSS_CONFIG_PATH=__TARGET_DIR__/current/strategy.yaml
+Environment=TOSS_SHARED_TOKEN_CACHE=__TARGET_DIR__/shared/toss-auth/token.json
 ExecStart=__TARGET_DIR__/current/.venv/bin/jdss-bot
 Restart=on-failure
 RestartSec=10
