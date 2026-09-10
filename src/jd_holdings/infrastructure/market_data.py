@@ -70,7 +70,7 @@ class YFinanceDataSource:
                         actions=False,
                         progress=False,
                         threads=False,
-                        repair=True,
+                        repair=False,
                         multi_level_index=False,
                     )
                 if frame is not None and not frame.empty:
@@ -89,11 +89,10 @@ class YFinanceDataSource:
                 )
                 time.sleep(YFINANCE_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
 
-        if frame is None or frame.empty:
-            # Keep the fallback independent from yf.download's repair machinery.
-            # yfinance repair may require optional sklearn components; a provider
-            # response can therefore be usable even when the repaired bulk path is
-            # unavailable. Strategy inputs are still normalized and range-checked.
+        if refresh and (frame is None or frame.empty):
+            # LIVE/refresh callers get one independent Yahoo path after bounded
+            # bulk-download failures. Historical/non-refresh callers intentionally
+            # preserve the existing cache contract instead of silently changing data.
             try:
                 with self._lock:
                     alternate = yf.Ticker(symbol).history(
@@ -145,6 +144,8 @@ class YFinanceDataSource:
             raise MarketDataError(f"yfinance 일봉 조회 실패: {symbol}") from last_error
 
         normalized = normalize_ohlcv(frame)
+        if isinstance(normalized.index, pd.DatetimeIndex) and normalized.index.tz is not None:
+            normalized.index = normalized.index.tz_localize(None)
         if cache_path:
             normalized.to_csv(cache_path)
         return normalized
@@ -258,7 +259,10 @@ class YFinanceDataSource:
     @staticmethod
     def _read_cache_full(path: Path) -> pd.DataFrame:
         cached = pd.read_csv(path, index_col=0, parse_dates=True)
-        return normalize_ohlcv(cached)
+        normalized = normalize_ohlcv(cached)
+        if isinstance(normalized.index, pd.DatetimeIndex) and normalized.index.tz is not None:
+            normalized.index = normalized.index.tz_localize(None)
+        return normalized
 
     def _best_cache(
         self,
