@@ -9,6 +9,7 @@ TRANSIENT_RECON_REASON_KEY = "reconciliation_transient_error"
 TRANSIENT_RECON_AT_KEY = "reconciliation_transient_at"
 AUTO_TRANSIENT_RECOVERY_PENDING_KEY = "jh_auto_transient_recovery_pending"
 AUTO_TRANSIENT_CLEAN_STREAK_KEY = "jh_auto_transient_clean_streak"
+DAILY_PROVIDER_RECOVERY_PENDING_KEY = "jh_auto_daily_provider_recovery_pending"
 TRANSIENT_RECOVERY_REQUIRED_CLEAN_CYCLES = 2
 ANALYSIS_RETRY_DELAYS_SECONDS = (300, 600, 900, 1800, 3600)
 RECOVERABLE_AUTH_CODES = {"invalid-token", "expired-token", "token-revoked"}
