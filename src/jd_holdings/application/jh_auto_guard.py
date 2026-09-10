@@ -17,7 +17,6 @@ AUTO_LAUNCH_AUTHORIZED_KEY = "jh_auto_launch_authorized"
 AUTO_QUARANTINE_KEY = "jh_auto_startup_quarantine"
 AUTO_OPERATOR_HALT_LATCH_KEY = "jh_auto_operator_halt_latched"
 AUTO_STATE_KEY = "jh_auto_state"
-PROVIDER_BUY_HOLD_KEY = "provider_buy_hold"
 V322_HWM_KEY = "v322_high_water_equity"
 V322_RISK_BUDGET_KEY = "v322_risk_budget"
 
@@ -87,10 +86,6 @@ def require_live_auto_buy_contract(
         raise RuntimeError("JH AUTO 대표 긴급정지 상태가 ON이거나 누락·손상되었습니다")
     if _text(repository, AUTO_STATE_KEY) != "RUNNING":
         raise RuntimeError("JH AUTO 실행상태가 RUNNING이 아닙니다")
-    if _text(repository, PROVIDER_BUY_HOLD_KEY) != "0":
-        raise RuntimeError(
-            "브로커 조회 임시차단이 해제되지 않아 실제 매수가 차단되어 있습니다"
-        )
 
     base = _decimal(repository, AUTO_BASE_CAPITAL_KEY)
     ratio = _decimal(repository, AUTO_RATIO_KEY)
