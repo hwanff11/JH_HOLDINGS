@@ -14,6 +14,7 @@ from jd_holdings.infrastructure.live_runtime_hardening import (
     HardenedOperationalSafetyTelegramBotApp,
     _live_order_monitor_interval,
 )
+from jd_holdings.infrastructure.provider_recovery import DailyAnalysisRetryGate
 from jd_holdings.settings import RuntimeSettings
 
 
@@ -240,6 +241,7 @@ def _scheduler_app(tmp_path, config, calls):
     app._last_monitor = -1_000_000_000.0
     app._last_idle_cash_sweep = -1_000_000_000.0
     app._reconciliation_notice_at = {}
+    app._daily_analysis_retry = DailyAnalysisRetryGate()
     app._send = lambda *args, **kwargs: None
     app._send_reconciliation_alert = lambda *args, **kwargs: None
     app._notify_runtime_error = lambda event_type, title, exc: (_ for _ in ()).throw(exc)
