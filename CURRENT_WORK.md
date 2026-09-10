@@ -8,13 +8,13 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- Oracle 실거래 runtime 배포본: **`b111c14192e6e7b1b267cd38f24654b25328ee82`**
+- Oracle 실거래 runtime 배포본: **`fac090b3bca02541c17d7fddb8c2678873754aeb`**
 - Oracle 서비스: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - 실거래 준비 완료 표시(`live_commissioned`): **ON**
 - 신규 BUY 잠금: **ON (`operator_buy_halt=1`)**
-- JH AUTO 최초 시작승인: **문서정리 작업에서 수행하지 않음 — 실제 승인상태는 Telegram에서 확인**
-- 자동운용 실제 BUY: **문서정리/배포 작업으로 시작하지 않음**
+- JH AUTO 최초 시작승인: **배포 작업에서 수행하지 않음 — 실제 승인상태는 Telegram에서 확인**
+- 자동운용 실제 BUY: **배포 작업으로 시작하지 않음**
 - `portfolio.live_enabled`: **false** — 일반 경로 오작동 방지 잠금 유지
 - SGOV 자동운용: **OFF**
 - 관리종목: **QQQ / TQQQ / SOXL**
@@ -22,10 +22,14 @@
 - 위험축소 SELL: **자동**, 불확실 상태에서는 안전정지와 계좌·원장 대조 우선
 - UNKNOWN 주문: **자동 재전송 금지**
 
-2026-09-07 한국시간 마지막 JH AUTO 운영배포 후 외부 점검에서 위 runtime SHA, 서비스 정상, DB 무결성, 주문감시 최근 동작, 실계좌 연결 및 신규 BUY 잠금 유지를 확인했습니다.
+2026-09-10 한국시간 운영배포 후 외부 점검에서 위 runtime SHA, systemd active, SQLite quick check, 스케줄러 heartbeat, 설정 검증, 서버 시계/디스크 상태를 확인했습니다. 배포 중 Toss read-only 인증·QQQ/TQQQ/SOXL 가격 조회와 Telegram 운영 메뉴 검증도 통과했으며, 신규 BUY 잠금은 기존 최초운용 전 안전상태대로 유지했습니다.
 
 ## 2. 최근 완료 상태
 
+- **2026-09-10 runtime provider self-healing 운영반영**: Toss `token-revoked` 읽기 복구, 동일 호스트 프로세스용 file-lock 공유 토큰 캐시, 주문/취소 POST blind replay 금지 유지, Yahoo 일봉 bounded retry + LIVE 독립 fallback 반영
+- yfinance 1.6.0 `repair=True`가 이상가격 복구 시 요구하는 `scikit-learn==1.9.0`을 production dependency로 명시하고 canonical V3.2.2 backtest 재검증 통과
+- PR #366 Quality/Security/Backtest 통과 후 `main` squash merge, main push Quality/Security 재검증, Oracle Live-Armed 배포와 별도 외부 health watch까지 PASS
+- CCI Swing Bot 토큰공유/POST 무재전송 보강은 private `cci_nvdl` main `bc9a15d752191b57bbefa14b73dfb26e00ab590d`에 병합 및 CI 통과. CCI Oracle runtime은 보안경계상 신뢰 실행환경에서 별도 배포할 때까지 기존 `2302e8e91d95c945d30dacf48672959858a4fa1a` 유지
 - **CCI Swing Bot v4.0.1 운영배포 완료(2026-09-08)**: exact source SHA `2302e8e91d95c945d30dacf48672959858a4fa1a`, Oracle `cci_bot` systemd active, Toss NVDL/USD read-only 및 OPEN 주문 조회, Telegram `/ping`·`/status`·`/order` 핸들러와 운영 알림, 최근 fatal 예외 점검을 모두 통과
 - CCI Oracle runtime은 **managed CPython 3.12.13**으로 배포됨
 - CCI v4.0.1 1회성 encrypted payload와 Oracle private key는 성공 시 폐기되었으며, 임시 key/patch/encrypted-deploy workflow는 운영 완료 후 제거
@@ -64,6 +68,6 @@
 
 ## 4. 문서와 runtime 관계
 
-상태문서 정리는 JH AUTO 전략·주문·DB·Oracle runtime 동작을 변경하지 않습니다. CCI는 별도 저장소/서비스이며, 이번 작업으로 JH_HOLDINGS에 남아 있던 CCI 1회성 및 cross-repository 배포 workflow를 모두 정리했습니다. CCI 배포 절차와 보안 경계는 CCI 저장소 `docs/OPERATIONS.md`를 기준으로 관리합니다.
+상태문서 정리는 JH AUTO 전략·주문·DB·Oracle runtime 동작을 변경하지 않습니다. CCI는 별도 저장소/서비스이며, JH_HOLDINGS에는 CCI 1회성 및 cross-repository 배포 workflow를 두지 않습니다. CCI 배포 절차와 보안 경계는 CCI 저장소 `docs/OPERATIONS.md`를 기준으로 관리합니다.
 
 완료된 과거 작업의 상세는 [`docs/HISTORY.md`](docs/HISTORY.md), 병합 PR, Git tag와 Actions artifact에서 확인합니다.
