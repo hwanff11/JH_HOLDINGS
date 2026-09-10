@@ -8,7 +8,7 @@
 - 전략 ID: **`JDSS-3.2.2-RS6M-ONEWAY-HWM75`**
 - config/package: **3.2.2**
 - 자동매매 실행계층: **JH AUTO 1.0.0**
-- Oracle 실거래 runtime code baseline: **`e1a7183563b9fb63f8ec9a5c9ac6a5df8194fcb4`**
+- Oracle 실거래 runtime 배포본: **`e1a7183563b9fb63f8ec9a5c9ac6a5df8194fcb4`**
 - Oracle service: **active**
 - 운용 모드: **실계좌 연결(`trading_mode=live`)**
 - `live_commissioned`: **ON**
@@ -43,7 +43,7 @@ GET 일시오류 / token-revoked / expired / invalid / retryable 429·timeout·5
 - 단순히 broker GET을 못 읽은 것만으로 **원장 손상으로 오인한 sticky SAFE_MODE를 만들지 않습니다**.
 - GET이 정상 응답한 뒤 실제 수량불일치, UNKNOWN, 주문 identity 불일치가 확인되면 기존처럼 **sticky SAFE_MODE + 수동 복구**입니다.
 - 운영자 `/halt` durable latch는 어떤 자동복구도 해제하지 않습니다.
-- 주문/취소 POST는 인증갱신·timeout·connection ambiguity 뒤 **blind replay 금지**를 유지합니다.
+- 주문/취소 POST는 인증갱신·timeout·connection ambiguity 뒤 **blind retry 금지**를 유지합니다.
 - transient recovery가 완료된 바로 그 호출에서 위험증가 주문을 이어서 보내지 않고 다음 독립 안전주기에서 다시 검증합니다.
 
 ### 07:00 Yahoo 일봉 조회 장애
