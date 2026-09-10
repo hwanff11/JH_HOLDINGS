@@ -24,6 +24,14 @@ def _frame(last: str = "2026-08-24") -> pd.DataFrame:
     )
 
 
+class _EmptyTicker:
+    def __init__(self, _symbol: str) -> None:
+        pass
+
+    def history(self, **_kwargs):
+        return pd.DataFrame()
+
+
 def test_refresh_retries_then_succeeds(monkeypatch, tmp_path):
     source = YFinanceDataSource(tmp_path)
     calls = {"count": 0}
@@ -35,12 +43,41 @@ def test_refresh_retries_then_succeeds(monkeypatch, tmp_path):
         return _frame()
 
     monkeypatch.setattr(market_data.yf, "download", fake_download)
+    monkeypatch.setattr(market_data.yf, "Ticker", _EmptyTicker)
     monkeypatch.setattr(market_data.time, "sleep", lambda _: None)
 
     result = source.daily("SOXL", date(2026, 8, 21), date(2026, 8, 24), refresh=True)
 
     assert calls["count"] == 3
     assert result.index[-1].date() == date(2026, 8, 24)
+
+
+def test_refresh_falls_back_to_ticker_history_after_bulk_download_outage(
+    monkeypatch, tmp_path
+):
+    source = YFinanceDataSource(tmp_path)
+    history_calls = {"count": 0}
+
+    class RecoveringTicker:
+        def __init__(self, symbol: str) -> None:
+            assert symbol == "SOXL"
+
+        def history(self, **kwargs):
+            history_calls["count"] += 1
+            assert kwargs["interval"] == "1d"
+            assert kwargs["auto_adjust"] is True
+            return _frame()
+
+    monkeypatch.setattr(
+        market_data.yf, "download", lambda *args, **kwargs: pd.DataFrame()
+    )
+    monkeypatch.setattr(market_data.yf, "Ticker", RecoveringTicker)
+    monkeypatch.setattr(market_data.time, "sleep", lambda _: None)
+
+    result = source.daily("SOXL", date(2026, 8, 21), date(2026, 8, 24), refresh=True)
+
+    assert result.index[-1].date() == date(2026, 8, 24)
+    assert history_calls["count"] == 1
 
 
 def test_refresh_uses_cache_only_when_requested_session_is_covered(monkeypatch, tmp_path):
@@ -50,7 +87,10 @@ def test_refresh_uses_cache_only_when_requested_session_is_covered(monkeypatch, 
     assert cache_path is not None
     cached.to_csv(cache_path)
 
-    monkeypatch.setattr(market_data.yf, "download", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        market_data.yf, "download", lambda *args, **kwargs: pd.DataFrame()
+    )
+    monkeypatch.setattr(market_data.yf, "Ticker", _EmptyTicker)
     monkeypatch.setattr(market_data.time, "sleep", lambda _: None)
 
     result = source.daily("SOXL", date(2026, 8, 21), date(2026, 8, 24), refresh=True)
