@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-
-import fcntl
 
 DEFAULT_SHARED_TOKEN_MAX_AGE_SECONDS = 18 * 60 * 60
 
@@ -17,14 +16,14 @@ class SharedTossTokenCache:
     """Cross-process Toss OAuth token cache for services sharing one API client.
 
     Toss may revoke an older client-credentials token when another process obtains a
-    replacement token for the same credentials.  JH_HOLDINGS and the independent CCI
-    bot can therefore invalidate each other when they use the same Toss app.  This
+    replacement token for the same credentials. JH_HOLDINGS and the independent CCI
+    bot can therefore invalidate each other when they use the same Toss app. This
     cache serializes token issuance with an OS file lock and lets every local process
     converge on the newest token.
 
-    The cache is opt-in through ``TOSS_SHARED_TOKEN_CACHE``.  Entries are keyed by a
+    The cache is opt-in through ``TOSS_SHARED_TOKEN_CACHE``. Entries are keyed by a
     SHA-256 fingerprint of the credential pair, so different Toss apps can safely use
-    the same cache file without seeing or overwriting one another's token.  The file
+    the same cache file without seeing or overwriting one another's token. The file
     itself must live in a private directory shared only by the runtime user.
     """
 
@@ -38,7 +37,7 @@ class SharedTossTokenCache:
     ) -> None:
         self.path = Path(path).expanduser() if path else None
         self.max_age_seconds = max(60, int(max_age_seconds))
-        source = f"{client_id or ''}\0{client_secret or ''}".encode("utf-8")
+        source = f"{client_id or ''}\0{client_secret or ''}".encode()
         self._fingerprint = hashlib.sha256(source).hexdigest()
 
     @classmethod
