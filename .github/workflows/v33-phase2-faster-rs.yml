@@ -1,0 +1,43 @@
+name: JDSS V3.3 Phase2 Faster RS Research
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_v33_phase2_faster_rs.py"
+      - ".github/workflows/v33-phase2-faster-rs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    name: V3.3 Phase2 Faster RS Sweep
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Run V3.3 phase2 faster-RS sweep
+        run: |
+          python scripts/research_v33_phase2_faster_rs.py \
+            --output-json reports/v33-phase2-faster-rs.json \
+            --output-md reports/v33-phase2-faster-rs.md
+      - name: Publish summary
+        run: cat reports/v33-phase2-faster-rs.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload research artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: v33-phase2-faster-rs-${{ github.run_id }}
+          path: |
+            reports/v33-phase2-faster-rs.json
+            reports/v33-phase2-faster-rs.md
+          retention-days: 90
