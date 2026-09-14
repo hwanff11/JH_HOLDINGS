@@ -124,6 +124,11 @@ def build_qqq_features(frame: pd.DataFrame, policy: V322Policy) -> pd.DataFrame:
     out["ret_short"] = close / close.shift(policy.momentum_short) - 1
     out["ret_medium"] = close / close.shift(policy.momentum_medium) - 1
     out["ret_long"] = close / close.shift(policy.momentum_long) - 1
+    # Keep the QQQ side of relative strength on the exact same lookback as
+    # the semiconductor benchmark.  For production V3.2.2 this remains 126
+    # sessions, while research policies can exercise a different RS horizon
+    # without silently comparing unlike periods.
+    out["rs_return"] = close / close.shift(policy.rs_lookback) - 1
     out["volatility"] = returns.rolling(policy.volatility_window).std() * (252**0.5)
     out["sma_long_slope"] = (
         out["sma_long"] / out["sma_long"].shift(policy.slope_lookback) - 1
@@ -186,7 +191,7 @@ def base_leverage(row: pd.Series, policy: V322Policy) -> float:
 
 
 def semiconductor_wins(qqq_row: pd.Series, semi_row: pd.Series) -> bool:
-    qqq_return = qqq_row.get("ret_long")
+    qqq_return = qqq_row.get("rs_return", qqq_row.get("ret_long"))
     semi_return = semi_row.get("rs_return")
     if pd.isna(qqq_return) or pd.isna(semi_return):
         return False

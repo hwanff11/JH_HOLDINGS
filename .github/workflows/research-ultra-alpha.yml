@@ -1,0 +1,45 @@
+name: Research Ultra Alpha
+
+on:
+  pull_request:
+    paths:
+      - "src/jd_holdings/backtest/portfolio_engine.py"
+      - "src/jd_holdings/core/v322_allocation.py"
+      - "src/jd_holdings/research/ultra_alpha.py"
+      - "scripts/research_ultra_alpha.py"
+      - "tests/test_ultra_alpha_research.py"
+      - ".github/workflows/research-ultra-alpha.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ultra-alpha-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check .
+      - run: pytest -q tests/test_ultra_alpha_research.py tests/test_v322_allocation.py tests/test_v3_portfolio.py
+      - name: Run independent validation
+        run: |
+          mkdir -p reports data/cache
+          python scripts/research_ultra_alpha.py \
+            --output-json reports/ultra-alpha.json \
+            --output-md reports/ultra-alpha.md
+      - name: Publish summary
+        run: cat reports/ultra-alpha.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ultra-alpha-${{ github.run_id }}
+          path: reports/ultra-alpha.*
