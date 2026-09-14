@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import threading
 from datetime import UTC, datetime, timedelta
+from datetime import time as clock_time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -16,12 +17,16 @@ from jd_holdings.infrastructure.market_clock import (
 
 from . import telegram_bot as telegram_bot_module
 from .initial_onboarding_telegram import InitialOnboardingTelegramBotApp
+from .provider_recovery import DAILY_PROVIDER_RECOVERY_PENDING_KEY
 from .telegram_bot_v322 import _v322_bot_commands
 
 RESUME_CONFIRMATION = "RESUME_BUYS"
 RESUME_REVIEW_CALLBACK = "ops_resume_review"
 RESUME_CONFIRM_CALLBACK = "ops_resume_confirm"
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
+DEFAULT_DAILY_BRIEF_START_KST = clock_time(7, 0)
+DAILY_BRIEF_WINDOW_MINUTES = 120
+DAILY_BRIEF_CUTOFF_NOTICE_DATE_KEY = "daily_brief_cutoff_notice_kst_date"
 
 
 def _operator_bot_commands() -> list[telebot.types.BotCommand]:
@@ -60,6 +65,56 @@ def _effective_buy_state_label(*, halted: bool, safe_mode: bool) -> str:
     return "✅ 매수 가능"
 
 
+def _as_seoul(now: datetime | None = None) -> datetime:
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    return current.astimezone(SEOUL_TZ)
+
+
+def _daily_brief_window_bounds(
+    now: datetime | None,
+    scheduled_time: clock_time,
+) -> tuple[datetime, datetime]:
+    """Return the KST delivery window for the operator's regular morning brief."""
+    current = _as_seoul(now)
+    start = current.replace(
+        hour=scheduled_time.hour,
+        minute=scheduled_time.minute,
+        second=0,
+        microsecond=0,
+    )
+    cutoff = start + timedelta(minutes=DAILY_BRIEF_WINDOW_MINUTES)
+    return start, cutoff
+
+
+def _daily_brief_delivery_allowed(
+    now: datetime | None,
+    scheduled_time: clock_time,
+) -> bool:
+    current = _as_seoul(now)
+    start, cutoff = _daily_brief_window_bounds(current, scheduled_time)
+    return start <= current < cutoff
+
+
+def _scheduled_daily_summary_message(text: str) -> bool:
+    """Identify only scheduler-generated allocation summaries, not operator commands."""
+    if "[JDSS 실거래 아침 브리핑]" in text:
+        return True
+    return text.startswith("📊 ") and "<b>" not in text
+
+
+def _should_suppress_scheduled_daily_summary(
+    text: str,
+    now: datetime | None,
+    scheduled_time: clock_time,
+) -> bool:
+    return _scheduled_daily_summary_message(text) and not _daily_brief_delivery_allowed(
+        now,
+        scheduled_time,
+    )
+
+
 class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
     """Add an operator circuit breaker without weakening automatic risk reduction."""
 
@@ -71,7 +126,25 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
             self.reconciliation_service,
         )
 
+    def _daily_brief_scheduled_time(self) -> clock_time:
+        scheduler = getattr(getattr(self, "config", None), "scheduler", None)
+        return getattr(
+            scheduler,
+            "daily_analysis_time_kst",
+            DEFAULT_DAILY_BRIEF_START_KST,
+        )
+
     def _send(self, text: str, *, markup=None, chat_id: int | None = None) -> None:
+        scheduled_time = self._daily_brief_scheduled_time()
+        if _should_suppress_scheduled_daily_summary(
+            text,
+            datetime.now(UTC),
+            scheduled_time,
+        ):
+            telegram_bot_module.LOGGER.info(
+                "정규 아침 브리핑 시간창 밖 scheduler 요약 전송 생략"
+            )
+            return
         text = _live_mode_operator_text(text, self.settings.trading_mode)
         halted = self.repository.get_system_value("operator_buy_halt") == "1"
         safe_mode = self._portfolio_safe_mode()
@@ -97,6 +170,58 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
                 1,
             )
         super()._send(text, markup=markup, chat_id=chat_id)
+
+    def _maybe_send_daily_brief_cutoff_notice(
+        self,
+        current: datetime | None = None,
+    ) -> None:
+        """Send one KST-day warning if the 07:00 brief is still unresolved at cutoff."""
+        now_kst = _as_seoul(current)
+        scheduled_time = self._daily_brief_scheduled_time()
+        _, cutoff = _daily_brief_window_bounds(now_kst, scheduled_time)
+        if now_kst < cutoff:
+            return
+        if self.repository.get_system_value(DAILY_PROVIDER_RECOVERY_PENDING_KEY) != "1":
+            return
+        notice_date = now_kst.date().isoformat()
+        if (
+            self.repository.get_system_value(DAILY_BRIEF_CUTOFF_NOTICE_DATE_KEY)
+            == notice_date
+        ):
+            return
+        try:
+            self._send(
+                "⚠️ <b>[오늘 아침 브리핑 미확정]</b>\n\n"
+                f"• 정규 브리핑 시간 : <code>{scheduled_time:%H:%M}~{cutoff:%H:%M} KST</code>\n"
+                "• 최신 미국장 일봉/전략 분석 : <b>아직 미확정</b>\n"
+                "• 신규 BUY : <b>최신 데이터 확보 전 차단 유지</b>\n"
+                "• 자동복구 : 백그라운드에서 계속 재시도\n\n"
+                "정규 아침 브리핑은 오늘 더 늦게 다시 보내지 않습니다. "
+                "데이터가 정상화되면 전체 브리핑 대신 <b>복구 완료 알림</b>만 전송하고, "
+                "실제 주문이 발생할 때는 주문·체결 메시지만 별도로 알려드립니다."
+            )
+        except Exception as exc:
+            telegram_bot_module.LOGGER.warning(
+                "아침 브리핑 cutoff 알림 전송 실패: %s", type(exc).__name__
+            )
+            return
+        self.repository.set_system_value(
+            DAILY_BRIEF_CUTOFF_NOTICE_DATE_KEY,
+            notice_date,
+        )
+
+    def _daily_brief_cutoff_notice_loop(self) -> None:
+        interval = max(
+            1,
+            min(self.config.scheduler.poll_interval_seconds, 30),
+        )
+        while not self._stop.wait(interval):
+            try:
+                self._maybe_send_daily_brief_cutoff_notice()
+            except Exception as exc:
+                telegram_bot_module.LOGGER.warning(
+                    "아침 브리핑 cutoff 점검 실패: %s", type(exc).__name__
+                )
 
     def _order_session_wait_message(self, current: datetime | None = None) -> str | None:
         """Explain closed/blocked order windows without changing strategy timing."""
@@ -339,6 +464,10 @@ class OperationalSafetyTelegramBotApp(InitialOnboardingTelegramBotApp):
     def run(self) -> None:
         self.bot.set_my_commands(_operator_bot_commands())
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
+        threading.Thread(
+            target=self._daily_brief_cutoff_notice_loop,
+            daemon=True,
+        ).start()
         telegram_bot_module.LOGGER.info(
             "JDSS V3.2.2 Telegram polling 시작 (operator BUY halt enabled)"
         )
