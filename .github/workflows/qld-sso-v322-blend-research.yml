@@ -1,0 +1,53 @@
+name: QLD V322 Blend Research
+
+on:
+  pull_request:
+    paths:
+      - "scripts/research_qld_sso_vs_v322_phase7.py"
+      - "scripts/research_qld_sso_vs_v322_phase8_bootstrap.py"
+      - ".github/workflows/qld-sso-v322-blend-research.yml"
+      - "scripts/research_qld_sso_vs_v322.py"
+      - "scripts/research_qld_sso_vs_v322_phase5.py"
+      - "scripts/research_qld_sso_alpha.py"
+      - "strategy.yaml"
+      - "src/**"
+  workflow_dispatch:
+
+jobs:
+  blend-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: |
+          ruff check scripts/research_qld_sso_vs_v322_phase7.py \
+            scripts/research_qld_sso_vs_v322_phase8_bootstrap.py \
+            scripts/research_qld_sso_vs_v322.py \
+            scripts/research_qld_sso_vs_v322_phase5.py \
+            scripts/research_qld_sso_alpha.py
+      - name: Run Phase 7 blend sweep
+        run: |
+          python scripts/research_qld_sso_vs_v322_phase7.py \
+            --output-json reports/qld-sso-v322-phase7.json \
+            --output-md reports/qld-sso-v322-phase7.md
+      - name: Run Phase 8 paired block bootstrap
+        run: |
+          python scripts/research_qld_sso_vs_v322_phase8_bootstrap.py \
+            --output-json reports/qld-sso-v322-phase8.json \
+            --output-md reports/qld-sso-v322-phase8.md
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: qld-v322-blend-research
+          path: |
+            reports/qld-sso-v322-phase7.json
+            reports/qld-sso-v322-phase7.md
+            reports/qld-sso-v322-phase8.json
+            reports/qld-sso-v322-phase8.md
