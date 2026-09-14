@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import html
 import threading
-from datetime import UTC, datetime, time as clock_time, timedelta
+from datetime import UTC, datetime, timedelta
+from datetime import time as clock_time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
