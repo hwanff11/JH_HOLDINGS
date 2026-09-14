@@ -1,0 +1,144 @@
+name: Oracle Morning Brief Diagnostic
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-jdss-brief-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+      github.actor == github.repository_owner &&
+      startsWith(github.event.issue.title, '[oracle-brief-diagnostic]'))
+    runs-on: ubuntu-latest
+    environment: oracle-dry-run
+    steps:
+      - name: Prepare pinned SSH trust
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KNOWN_HOSTS: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ORACLE_SSH_KEY"
+          test -n "$ORACLE_SSH_KNOWN_HOSTS"
+          test -n "$ORACLE_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_jdss
+          printf '%s\n' "$ORACLE_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle_jdss ~/.ssh/known_hosts
+
+      - name: Read whitelisted morning-brief state
+        id: diagnose
+        env:
+          SSH_KEY_PATH: /home/runner/.ssh/oracle_jdss
+          SSH_KNOWN_HOSTS_PATH: /home/runner/.ssh/known_hosts
+          SERVER_HOST: ${{ secrets.ORACLE_HOST }}
+          SERVER_USER: ${{ vars.ORACLE_USER || 'ubuntu' }}
+          SERVER_TARGET_DIR: /home/ubuntu/JH_HOLDINGS
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS_PATH" \
+            "$SERVER_USER@$SERVER_HOST" \
+            "TARGET_DIR='$SERVER_TARGET_DIR' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          current="$(readlink -f "$TARGET_DIR/current")"
+          env_file="$TARGET_DIR/shared/.env"
+          test -d "$current"
+          test -f "$env_file"
+          sudo systemctl is-active --quiet jh_holdings_bot
+
+          set -a
+          source "$env_file"
+          set +a
+          test "${JDSS_TRADING_MODE:-}" = "live"
+          db_path="${JDSS_DB_PATH:-}"
+          test "$db_path" = "$TARGET_DIR/shared/data/jdss-live.db"
+          test -f "$db_path"
+
+          "$current/.venv/bin/python" - "$db_path" "$current" <<'PY'
+          import sqlite3
+          import sys
+          from datetime import UTC, datetime
+          from pathlib import Path
+
+          path, release = sys.argv[1:]
+          keys = (
+              "live_commissioned",
+              "operator_buy_halt",
+              "v322_portfolio_safe_mode",
+              "last_analysis_trade_date",
+              "last_v322_allocation_trade_date",
+              "jh_auto_daily_provider_recovery_pending",
+              "jh_auto_quarantine",
+              "jh_auto_state",
+              "jh_auto_launch_authorized",
+              "jh_auto_operator_halt_latched",
+              "jh_auto_last_safety_success_at",
+              "jh_auto_notification_failed_at",
+              "jh_auto_notification_error",
+              "jh_auto_scheduler_heartbeat",
+              "daily_brief_cutoff_notice_kst_date",
+              "daily_brief_sent_kst_date",
+          )
+          con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+          try:
+              quick = con.execute("PRAGMA quick_check").fetchone()
+              if quick is None or quick[0] != "ok":
+                  raise SystemExit(f"SQLite quick_check failed: {quick}")
+              placeholders = ",".join("?" for _ in keys)
+              rows = dict(con.execute(
+                  f"SELECT key, value FROM system_state WHERE key IN ({placeholders})",
+                  keys,
+              ).fetchall())
+          finally:
+              con.close()
+
+          print(f"RUNTIME_SHA={Path(release).name}")
+          print(f"CHECKED_AT_UTC={datetime.now(UTC).isoformat()}")
+          for key in keys:
+              value = rows.get(key)
+              if value is None:
+                  value = "<unset>"
+              # All keys above are non-secret operational state. Never widen this list
+              # to credentials, account identifiers, tokens, or raw order payloads.
+              print(f"STATE {key}={value}")
+          PY
+
+          echo 'RECENT_RUNTIME_MARKERS_BEGIN'
+          sudo journalctl -u jh_holdings_bot \
+            --since '2026-09-14 21:45:00 UTC' --no-pager -o cat \
+            | grep -E 'V3\.2\.2 배분 점검|일일 전략 분석|일일 시세|자동운용 알림 전송 실패|정규 아침 브리핑 시간창 밖|자동운용 주기 예외|SAFE_MODE|임시격리|provider|Provider' \
+            | tail -n 120 \
+            || true
+          echo 'RECENT_RUNTIME_MARKERS_END'
+          REMOTE
+
+      - name: Report diagnostic result
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          OUTCOME: ${{ steps.diagnose.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$OUTCOME" == "success" ]]; then
+            body="✅ Morning brief read-only diagnostic completed. Whitelisted scheduler/brief state and sanitized runtime markers were collected. No Toss token was issued and no order/state mutation was performed.\n\nActions run: $RUN_URL"
+          else
+            body="❌ Morning brief diagnostic failed before a complete read-only snapshot could be collected. No trading state was changed.\n\nActions run: $RUN_URL"
+          fi
+          gh issue comment "$ISSUE_NUMBER" --body "$(printf '%b' "$body")"
+          gh issue close "$ISSUE_NUMBER" --reason completed
