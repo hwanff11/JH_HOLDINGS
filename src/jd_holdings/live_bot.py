@@ -24,7 +24,6 @@ from jd_holdings.infrastructure.final_ops_runtime import (
     FinalOpsOrderMonitor as OrderMonitor,
 )
 from jd_holdings.infrastructure.final_ops_runtime import LiveRuntimeLock
-from jd_holdings.infrastructure.jh_auto_live_display import LiveJHAutoTelegramBotApp
 from jd_holdings.infrastructure.live_reconciliation import (
     ResilientLiveReconciliationService as ReconciliationService,
 )
@@ -33,12 +32,15 @@ from jd_holdings.infrastructure.live_runtime_resilience import (
 )
 from jd_holdings.infrastructure.market_clock import MarketClock
 from jd_holdings.infrastructure.market_data import YFinanceDataSource
+from jd_holdings.infrastructure.morning_brief_runtime import (
+    MorningBriefLiveJHAutoTelegramBotApp,
+)
 from jd_holdings.settings import load_runtime_settings
 
 # Keep the historical module-level seam used by live entrypoint tests and emergency
-# monkeypatch tooling, while the concrete production implementation is the new
-# JH AUTO-aware display class.
-JHAutoTelegramBotApp = LiveJHAutoTelegramBotApp
+# monkeypatch tooling, while the concrete production implementation adds an independent
+# read-only morning-brief loop without weakening the regular-session allocator boundary.
+JHAutoTelegramBotApp = MorningBriefLiveJHAutoTelegramBotApp
 
 
 def _run_locked_live(settings) -> None:
