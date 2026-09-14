@@ -112,24 +112,34 @@ jobs:
               value = rows.get(key)
               if value is None:
                   value = "<unset>"
-              # All keys above are non-secret operational state. Never widen this list
-              # to credentials, account identifiers, tokens, or raw order payloads.
               print(f"STATE {key}={value}")
           PY
 
-          echo 'RECENT_RUNTIME_MARKERS_BEGIN'
+          pattern='V3\.2\.2 배분 점검|일일 전략 분석|일일 시세|자동운용 알림 전송 실패|정규 아침 브리핑 시간창 밖|자동운용 주기 예외|SAFE_MODE|임시격리|provider|Provider'
+
+          echo 'RECENT_APP_LOG_MARKERS_BEGIN'
+          log_path="${JDSS_LOG_PATH:-$TARGET_DIR/shared/logs/jdss.log}"
+          if [[ -f "$log_path" ]]; then
+            grep -E "$pattern" "$log_path" | tail -n 160 || true
+          else
+            echo 'APP_LOG_UNAVAILABLE'
+          fi
+          echo 'RECENT_APP_LOG_MARKERS_END'
+
+          echo 'RECENT_JOURNAL_MARKERS_BEGIN'
           sudo journalctl -u jh_holdings_bot \
             --since '2026-09-14 21:45:00 UTC' --no-pager -o cat \
-            | grep -E 'V3\.2\.2 배분 점검|일일 전략 분석|일일 시세|자동운용 알림 전송 실패|정규 아침 브리핑 시간창 밖|자동운용 주기 예외|SAFE_MODE|임시격리|provider|Provider' \
+            | grep -E "$pattern" \
             | tail -n 120 \
             || true
-          echo 'RECENT_RUNTIME_MARKERS_END'
+          echo 'RECENT_JOURNAL_MARKERS_END'
           REMOTE
 
       - name: Report diagnostic result
         if: always() && github.event_name == 'issues'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           OUTCOME: ${{ steps.diagnose.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
