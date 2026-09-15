@@ -99,7 +99,13 @@ def _daily_brief_delivery_allowed(
 
 def _scheduled_daily_summary_message(text: str) -> bool:
     """Identify only scheduler-generated allocation summaries, not operator commands."""
-    if "[JDSS 실거래 아침 브리핑]" in text:
+    # LIVE AUTO presentation normalizes the inherited JDSS title before this safety
+    # boundary sees the message. Recognize both forms so a service restart after the
+    # cutoff cannot leak a stale full morning brief simply because its title changed.
+    if (
+        "[JDSS 실거래 아침 브리핑]" in text
+        or "[JH AUTO 아침 브리핑]" in text
+    ):
         return True
     return text.startswith("📊 ") and "<b>" not in text
 
