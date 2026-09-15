@@ -39,6 +39,9 @@ def test_late_scheduler_summary_is_suppressed_but_operator_and_recovery_messages
         "🌅 <b>[JDSS 실거래 아침 브리핑]</b>", late, scheduled
     )
     assert _should_suppress_scheduled_daily_summary(
+        "🌅 <b>[JH AUTO 아침 브리핑]</b>", late, scheduled
+    )
+    assert _should_suppress_scheduled_daily_summary(
         "📊 V3.2.2 목표비중 유지", late, scheduled
     )
     assert not _should_suppress_scheduled_daily_summary(
@@ -50,6 +53,16 @@ def test_late_scheduler_summary_is_suppressed_but_operator_and_recovery_messages
     assert not _should_suppress_scheduled_daily_summary(
         "✅ <b>[실주문 체결 완료]</b>", late, scheduled
     )
+
+
+def test_jh_auto_brief_is_allowed_at_0700_but_blocked_after_0900():
+    scheduled = time(7, 0)
+    text = "🌅 <b>[JH AUTO 아침 브리핑]</b>"
+
+    assert not _should_suppress_scheduled_daily_summary(text, _kst(7, 0), scheduled)
+    assert not _should_suppress_scheduled_daily_summary(text, _kst(8, 59), scheduled)
+    assert _should_suppress_scheduled_daily_summary(text, _kst(9, 0), scheduled)
+    assert _should_suppress_scheduled_daily_summary(text, _kst(9, 13), scheduled)
 
 
 class _Repository:
