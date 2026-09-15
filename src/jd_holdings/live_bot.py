@@ -17,6 +17,9 @@ from jd_holdings.automation.final_ops_hardening import (
 )
 from jd_holdings.bot import configure_logging, recover_unapplied_core_fills
 from jd_holdings.config import load_config
+from jd_holdings.infrastructure.dual_market_data import (
+    YahooTossDualDataSource as YFinanceDataSource,
+)
 from jd_holdings.infrastructure.final_ops_runtime import (
     FinalOpsLiveInitialOnboardingPortfolioService as HardenedLiveInitialOnboardingPortfolioService,
 )
@@ -31,7 +34,6 @@ from jd_holdings.infrastructure.live_runtime_resilience import (
     ResilientReadTossClient as TossClient,
 )
 from jd_holdings.infrastructure.market_clock import MarketClock
-from jd_holdings.infrastructure.market_data import YFinanceDataSource
 from jd_holdings.infrastructure.morning_brief_runtime import (
     MorningBriefLiveJHAutoTelegramBotApp,
 )
@@ -68,9 +70,12 @@ def _run_locked_live(settings) -> None:
             len(recovered_core_fills),
         )
 
-    data_source = YFinanceDataSource(settings.cache_path)
     market_clock = MarketClock()
     broker = TossClient()
+    # LIVE strategy reads Yahoo first and uses the same resilient Toss client for
+    # adjusted daily-candle fallback. Sharing the broker instance also preserves the
+    # cross-process token cache and never creates an independent OAuth token issuer.
+    data_source = YFinanceDataSource(settings.cache_path, broker)
     order_manager = OrderManager(repository, broker, settings)
     position_manager = PositionManager(config, repository, broker)
     tp_manager = TakeProfitManager(repository, broker, order_manager)
