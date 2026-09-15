@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time as clock_time
+from datetime import UTC, date, datetime
+from datetime import time as clock_time
 from decimal import Decimal
 from types import SimpleNamespace
 
